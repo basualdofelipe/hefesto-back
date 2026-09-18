@@ -29,34 +29,86 @@ import { ProductCostData } from '../costs/dto/product-with-cost.dto';
 // ─── Mock config matching the runtime shape of TiendanubeConfigService.getAll() ──
 
 const GATEWAY_UUID = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+const MP_GATEWAY_UUID = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
 const PLAN_ESENCIAL_UUID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+const PLAN_ESCALA_UUID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+const TN_PLAN_ESCALA = 'escala';
+const TN_GATEWAY_MERCADO_PAGO = 'mercado_pago';
+const TN_PAYMENT_TODOS_LOS_MEDIOS = 'todos_los_medios';
+
+type MockRate = TiendanubeConfigAll['rates'][number];
+
+const pagoNubeGateway = {
+  id: GATEWAY_UUID,
+  slug: TN_GATEWAY_PAGO_NUBE,
+  label: 'Pago Nube',
+  isActive: true,
+};
+const mercadoPagoGateway = {
+  id: MP_GATEWAY_UUID,
+  slug: TN_GATEWAY_MERCADO_PAGO,
+  label: 'Mercado Pago',
+  isActive: true,
+};
+
+// Pago Nube tarjeta 14 d: one row per plan plus the null-plan fallback (D-05)
+const PN_TARJETA_14_ESENCIAL = {
+  id: 'rate-pn-14-esencial',
+  gateway: pagoNubeGateway,
+  paymentMethod: TN_PAYMENT_TARJETA,
+  withdrawalDays: 14,
+  ratePercent: 3.49,
+  isActive: true,
+  planId: PLAN_ESENCIAL_UUID,
+} as unknown as MockRate;
+const PN_TARJETA_14_ESCALA = {
+  id: 'rate-pn-14-escala',
+  gateway: pagoNubeGateway,
+  paymentMethod: TN_PAYMENT_TARJETA,
+  withdrawalDays: 14,
+  ratePercent: 2.99,
+  isActive: true,
+  planId: PLAN_ESCALA_UUID,
+} as unknown as MockRate;
+const PN_TARJETA_14_ALL_PLANS = {
+  id: 'rate-pn-14-null',
+  gateway: pagoNubeGateway,
+  paymentMethod: TN_PAYMENT_TARJETA,
+  withdrawalDays: 14,
+  ratePercent: 3.49,
+  isActive: true,
+  planId: null,
+} as unknown as MockRate;
+// Mercado Pago has no per-plan fee: a single null-plan row
+const MP_TODOS_14_ALL_PLANS = {
+  id: 'rate-mp-14-null',
+  gateway: mercadoPagoGateway,
+  paymentMethod: TN_PAYMENT_TODOS_LOS_MEDIOS,
+  withdrawalDays: 14,
+  ratePercent: 4.5,
+  isActive: true,
+  planId: null,
+} as unknown as MockRate;
 
 const mockConfig: TiendanubeConfigAll = {
   gateways: [
     {
-      id: GATEWAY_UUID,
-      slug: TN_GATEWAY_PAGO_NUBE,
-      label: 'Pago Nube',
-      isActive: true,
+      ...pagoNubeGateway,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    } as TiendanubeConfigAll['gateways'][number],
+    {
+      ...mercadoPagoGateway,
       createdAt: new Date(),
       updatedAt: new Date(),
     } as TiendanubeConfigAll['gateways'][number],
   ],
+  // Escala first on purpose: a tuple-only match or plans[0] would pick Escala
   rates: [
-    {
-      id: 'rate-1',
-      gateway: {
-        id: GATEWAY_UUID,
-        slug: TN_GATEWAY_PAGO_NUBE,
-        label: 'Pago Nube',
-        isActive: true,
-      },
-      paymentMethod: TN_PAYMENT_TARJETA,
-      withdrawalDays: 14,
-      ratePercent: 3.49,
-      isActive: true,
-      planId: null,
-    } as unknown as TiendanubeConfigAll['rates'][number],
+    PN_TARJETA_14_ESCALA,
+    PN_TARJETA_14_ESENCIAL,
+    PN_TARJETA_14_ALL_PLANS,
+    MP_TODOS_14_ALL_PLANS,
   ],
   installments: [
     {
@@ -70,13 +122,23 @@ const mockConfig: TiendanubeConfigAll = {
     ivaRate: 21,
     iibbRate: 3.5,
   } as TiendanubeConfigAll['taxConfig'],
+  // Runtime order (getPlans sorts by slug ASC): Escala before Esencial
   plans: [
+    {
+      id: PLAN_ESCALA_UUID,
+      slug: TN_PLAN_ESCALA,
+      label: 'Escala',
+      cptPagoNube: 0,
+      cptOtherGateways: 0.7,
+      isActive: true,
+      onlyPagoNube: false,
+    } as unknown as TiendanubeConfigAll['plans'][number],
     {
       id: PLAN_ESENCIAL_UUID,
       slug: TN_PLAN_ESENCIAL,
       label: 'Esencial',
       cptPagoNube: 0,
-      cptOtherGateways: 1.5,
+      cptOtherGateways: 2,
       isActive: true,
       onlyPagoNube: false,
     } as unknown as TiendanubeConfigAll['plans'][number],
@@ -165,6 +227,7 @@ describe('CalculatorService', () => {
         input: CASE_A,
         realProfit: 58773.73,
         marginPercent: 67.56,
+        baseRate: 3.49,
         intermediates: {
           customerTotal: 94315,
           gatewayFee: 3982.8281,
@@ -189,6 +252,7 @@ describe('CalculatorService', () => {
         },
         realProfit: -15910.78,
         marginPercent: -19.89,
+        baseRate: 3.49,
         intermediates: {
           customerTotal: 1080000,
           gatewayFee: 45607.32,
@@ -204,6 +268,7 @@ describe('CalculatorService', () => {
         input: { sellingPrice: 87000, shippingCharged: 0, shippingCost: 7315 },
         realProfit: 53239.59,
         marginPercent: 61.19,
+        baseRate: 3.49,
         intermediates: {
           customerTotal: 87000,
           gatewayFee: 3673.923,
@@ -218,6 +283,7 @@ describe('CalculatorService', () => {
         input: { sellingPrice: 87000, shippingCharged: 0, shippingCost: 0 },
         realProfit: 59285.05,
         marginPercent: 68.14,
+        baseRate: 3.49,
         intermediates: {
           ivaCreditShipping: 0,
           ivaNet: 13089.3098,
@@ -225,13 +291,36 @@ describe('CalculatorService', () => {
         },
         shippingCost: 0,
       },
+      {
+        name: 'E: 87000 / shipping 7315 / 7315, plan Escala (rate 2.99)',
+        input: { ...CASE_A, planSlug: TN_PLAN_ESCALA },
+        realProfit: 59245.3,
+        marginPercent: 68.1,
+        baseRate: 2.99,
+        intermediates: {
+          rateWithIva: 3.6179,
+          gatewayFee: 3412.2224,
+          ivaCreditGatewayFee: 592.2039,
+          ivaNet: 13134.7289,
+          netReceived: 87601.7526,
+        },
+        shippingCost: 7315,
+      },
     ])(
       'case $name',
-      ({ input, realProfit, marginPercent, intermediates, shippingCost }) => {
+      ({
+        input,
+        realProfit,
+        marginPercent,
+        baseRate,
+        intermediates,
+        shippingCost,
+      }) => {
         const result: CalcResult = service.calcForward({ ...BASE, ...input });
 
         expect(result.realProfit).toBe(realProfit);
         expect(result.marginPercent).toBe(marginPercent);
+        expect(result.baseRate).toBe(baseRate);
 
         for (const [key, expected] of Object.entries(intermediates)) {
           expect(result[key as keyof CalcResult]).toBeCloseTo(expected, 2);
@@ -279,6 +368,86 @@ describe('CalculatorService', () => {
           config: { ...mockConfig, taxConfig: null },
         }),
       ).toThrow(NotFoundException);
+    });
+
+    it('throws NotFoundException for an unknown planSlug', () => {
+      expect(() =>
+        service.calcForward({ ...BASE, ...CASE_A, planSlug: 'premium' }),
+      ).toThrow(new NotFoundException('Plan not found: premium'));
+    });
+  });
+
+  // ─── calcForward: per-plan rate resolution (R5, D-05) ────────────
+
+  describe('calcForward per-plan rates', () => {
+    it('defaults to Esencial when planSlug is omitted (case A numbers, not Escala)', () => {
+      const result = service.calcForward({
+        ...BASE,
+        ...CASE_A,
+        planSlug: undefined,
+      });
+
+      expect(result.realProfit).toBe(58773.73);
+      expect(result.baseRate).toBe(3.49);
+    });
+
+    it("falls back to the null-plan row when the plan has no specific row (another plan's row is ignored)", () => {
+      const result = service.calcForward({
+        ...BASE,
+        ...CASE_A,
+        planSlug: TN_PLAN_ESENCIAL,
+        config: {
+          ...mockConfig,
+          rates: [
+            PN_TARJETA_14_ESCALA,
+            PN_TARJETA_14_ALL_PLANS,
+            MP_TODOS_14_ALL_PLANS,
+          ],
+        },
+      });
+
+      expect(result.baseRate).toBe(3.49);
+      expect(result.realProfit).toBe(58773.73);
+    });
+
+    it('throws the tuple 404 when neither the plan row nor the null-plan row exists', () => {
+      expect(() =>
+        service.calcForward({
+          ...BASE,
+          ...CASE_A,
+          planSlug: TN_PLAN_ESCALA,
+          config: {
+            ...mockConfig,
+            rates: [PN_TARJETA_14_ESENCIAL, MP_TODOS_14_ALL_PLANS],
+          },
+        }),
+      ).toThrow(
+        new NotFoundException(
+          'Gateway rate not found for pago_nube/tarjeta_debito_credito/14d',
+        ),
+      );
+    });
+
+    it('Mercado Pago (null-plan row) charges the same fee on Esencial and Escala; only the CPT differs', () => {
+      const MP = {
+        ...BASE,
+        ...CASE_A,
+        gatewaySlug: TN_GATEWAY_MERCADO_PAGO,
+        paymentMethod: TN_PAYMENT_TODOS_LOS_MEDIOS,
+      };
+
+      const esencial = service.calcForward({
+        ...MP,
+        planSlug: TN_PLAN_ESENCIAL,
+      });
+      const escala = service.calcForward({ ...MP, planSlug: TN_PLAN_ESCALA });
+
+      expect(esencial.baseRate).toBe(4.5);
+      expect(escala.baseRate).toBe(esencial.baseRate);
+      expect(escala.gatewayFee).toBe(esencial.gatewayFee);
+      // CPT for other gateways: Esencial 2 % vs Escala 0.7 % of the 94315 customer total
+      expect(esencial.cpt).toBeCloseTo(1886.3, 2);
+      expect(escala.cpt).toBeCloseTo(660.205, 2);
     });
   });
 
