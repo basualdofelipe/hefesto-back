@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { NotFoundException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '@nestjs/common';
 import {
   CalculatorService,
   PRODUCT_COST_REQUIRED_MESSAGE,
@@ -25,6 +25,7 @@ import {
   CalcInverseResult,
 } from './dto/calc-result.dto';
 import { ProductCostData } from '../costs/dto/product-with-cost.dto';
+import { Product } from '../products/entities/product.entity';
 
 // ─── Mock config matching the runtime shape of TiendanubeConfigService.getAll() ──
 
@@ -207,6 +208,7 @@ describe('CalculatorService', () => {
           provide: ProductsService,
           useValue: {
             findAll: jest.fn(),
+            findOne: jest.fn(),
           },
         },
       ],
@@ -526,6 +528,66 @@ describe('CalculatorService', () => {
         error: true,
         message: 'Ganancia inalcanzable con estas tasas',
       });
+    });
+  });
+
+  // ─── resolveProductCost: 400 / 404 / 400 "Definí…" / productId wins (R8, D-09) ──
+
+  describe('resolveProductCost', () => {
+    const KNOWN_PRODUCT_ID = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+    const UNKNOWN_PRODUCT_ID = '00000000-0000-4000-8000-000000000000';
+
+    it('rejects with BadRequestException when neither productId nor productCost is given', async () => {
+      await expect(
+        service.resolveProductCost(undefined, undefined),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('returns productCost as-is when there is no productId, without touching products or costs', async () => {
+      await expect(
+        service.resolveProductCost(undefined, 6534.48),
+      ).resolves.toBe(6534.48);
+
+      expect(productsService.findOne).not.toHaveBeenCalled();
+      expect(costsService.calculateForProduct).not.toHaveBeenCalled();
+    });
+
+    it('propagates NotFoundException for an unknown productId and never asks for its cost', async () => {
+      productsService.findOne.mockRejectedValue(
+        new NotFoundException('Producto no encontrado'),
+      );
+
+      await expect(
+        service.resolveProductCost(UNKNOWN_PRODUCT_ID, undefined),
+      ).rejects.toBeInstanceOf(NotFoundException);
+
+      expect(costsService.calculateForProduct).not.toHaveBeenCalled();
+    });
+
+    it('rejects with the product-cost-required message when the product exists but has no BOM', async () => {
+      productsService.findOne.mockResolvedValue({
+        id: KNOWN_PRODUCT_ID,
+      } as unknown as Product);
+      costsService.calculateForProduct.mockResolvedValue(null);
+
+      await expect(
+        service.resolveProductCost(KNOWN_PRODUCT_ID, undefined),
+      ).rejects.toThrow(new BadRequestException(PRODUCT_COST_REQUIRED_MESSAGE));
+    });
+
+    it('lets the DB cost win when both productId and productCost are given', async () => {
+      productsService.findOne.mockResolvedValue({
+        id: KNOWN_PRODUCT_ID,
+      } as unknown as Product);
+      costsService.calculateForProduct.mockResolvedValue({
+        cost: 6534.48,
+        costBreakdown: [],
+        costWarnings: [],
+      });
+
+      await expect(
+        service.resolveProductCost(KNOWN_PRODUCT_ID, 1),
+      ).resolves.toBe(6534.48);
     });
   });
 
