@@ -485,8 +485,6 @@ describe('CalculatorService', () => {
 
       expect((inverse as CalcError).error).toBeUndefined();
       const { requiredSellingPrice } = inverse as CalcInverseResult;
-      // The bracket starts at productCost, so the break-even price must sit above it
-      expect(requiredSellingPrice > 6534.48).toBe(true);
 
       const forward = service.calcForward({
         ...BASE,

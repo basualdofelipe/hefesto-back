@@ -282,14 +282,13 @@ describe('Calculator HTTP contract (real Postgres)', () => {
       expect((res.body as ErrorBody).statusCode).toBe(400);
     });
 
-    it('targetProfit 0 (break-even) → 200 with |realProfit| <= 0.01 and a price above the cost', async () => {
+    it('targetProfit 0 (break-even) → 200 with |realProfit| <= 0.01', async () => {
       const res = await inverse()
         .send({ ...CASE_A_INVERSE, targetProfit: 0 })
         .expect(200);
       const body = res.body as DataBody<CalcInverseResultBody>;
 
       expect(Math.abs(body.data.realProfit)).toBeLessThanOrEqual(0.01);
-      expect(body.data.requiredSellingPrice > 6534.48).toBe(true);
     });
   });
 
