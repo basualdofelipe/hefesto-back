@@ -13,11 +13,20 @@ const GATEWAY_ID = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
 const RATE_ID = 'b2c3d4e5-f6a7-8901-bcde-f12345678901';
 const TAX_CONFIG_ID = 'c3d4e5f6-a7b8-9012-cdef-123456789012';
 const SHIPPING_CONFIG_ID = 'd4e5f6a7-b8c9-0123-def0-234567890123';
+const PLAN_ID = 'e5f6a7b8-c9d0-4123-8f01-345678901234';
+const MP_GATEWAY_ID = 'f6a7b8c9-d0e1-4234-9012-456789012345';
 
 const mockGateway = {
   id: GATEWAY_ID,
   slug: 'pago_nube',
   label: 'Pago Nube',
+  isActive: true,
+} as TnPaymentGateway;
+
+const mockMercadoPagoGateway = {
+  id: MP_GATEWAY_ID,
+  slug: 'mercado_pago',
+  label: 'Mercado Pago',
   isActive: true,
 } as TnPaymentGateway;
 
@@ -154,6 +163,89 @@ describe('TiendanubeConfigService', () => {
       expect(result.ratePercent).toBe(2.5);
       // A new record was appended (save was called)
       expect(mockGatewayRateRepo.save).toHaveBeenCalledWith(rawRate);
+    });
+
+    describe('plan-scoped rates (D-06)', () => {
+      const baseDto = {
+        paymentMethod: 'tarjeta_debito_credito',
+        withdrawalDays: 14,
+        ratePercent: 2.99,
+      };
+      const savedRate = {
+        id: RATE_ID,
+        gateway: mockGateway,
+        paymentMethod: 'tarjeta_debito_credito',
+        withdrawalDays: 14,
+        ratePercent: '2.99',
+        isActive: true,
+        plan: { id: PLAN_ID },
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      } as unknown as TnGatewayRate;
+
+      beforeEach(() => {
+        mockGatewayRateRepo.create.mockReturnValue(savedRate);
+        mockGatewayRateRepo.save.mockResolvedValue(savedRate);
+      });
+
+      it('attaches the plan for Pago Nube when planId is given and exposes planId on the result', async () => {
+        mockGatewayRepo.findOne.mockResolvedValue(mockGateway);
+        mockPlanRepo.findOne.mockResolvedValue({ id: PLAN_ID, slug: 'escala' });
+
+        const result = await service.updateGatewayRate(GATEWAY_ID, {
+          ...baseDto,
+          planId: PLAN_ID,
+        });
+
+        expect(mockPlanRepo.findOne).toHaveBeenCalledWith({
+          where: { id: PLAN_ID },
+        });
+        expect(mockGatewayRateRepo.create).toHaveBeenCalledWith(
+          expect.objectContaining({
+            plan: expect.objectContaining({ id: PLAN_ID }),
+          }),
+        );
+        expect(result.planId).toBe(PLAN_ID);
+      });
+
+      it('throws NotFoundException("Plan no encontrado") for an unknown planId on Pago Nube', async () => {
+        mockGatewayRepo.findOne.mockResolvedValue(mockGateway);
+        mockPlanRepo.findOne.mockResolvedValue(null);
+
+        await expect(
+          service.updateGatewayRate(GATEWAY_ID, {
+            ...baseDto,
+            planId: PLAN_ID,
+          }),
+        ).rejects.toThrow(new NotFoundException('Plan no encontrado'));
+
+        expect(mockGatewayRateRepo.save).not.toHaveBeenCalled();
+      });
+
+      it('ignores planId for a gateway whose fee does not vary by plan (mercado_pago): plan null, plan repo untouched', async () => {
+        mockGatewayRepo.findOne.mockResolvedValue(mockMercadoPagoGateway);
+
+        await service.updateGatewayRate(MP_GATEWAY_ID, {
+          ...baseDto,
+          planId: PLAN_ID,
+        });
+
+        expect(mockPlanRepo.findOne).not.toHaveBeenCalled();
+        expect(mockGatewayRateRepo.create).toHaveBeenCalledWith(
+          expect.objectContaining({ plan: null }),
+        );
+      });
+
+      it('stores plan null when the dto carries no planId', async () => {
+        mockGatewayRepo.findOne.mockResolvedValue(mockGateway);
+
+        await service.updateGatewayRate(GATEWAY_ID, baseDto);
+
+        expect(mockPlanRepo.findOne).not.toHaveBeenCalled();
+        expect(mockGatewayRateRepo.create).toHaveBeenCalledWith(
+          expect.objectContaining({ plan: null }),
+        );
+      });
     });
   });
 
@@ -334,6 +426,75 @@ describe('TiendanubeConfigService', () => {
 
       expect(result.shipping).toBeNull();
       expect(result.gateways).toEqual([mockGateway]);
+    });
+
+    it('selects the latest gateway rate per (gateway, method, days, plan) — DISTINCT ON and ORDER BY include gr.plan_id', async () => {
+      mockShippingConfigRepo.findOne.mockResolvedValue(null);
+
+      await service.getAll();
+
+      expect(mockGatewayRateRepo.query).toHaveBeenCalledWith(
+        expect.stringContaining(
+          'DISTINCT ON (gr.gateway_id, gr.payment_method, gr.withdrawal_days, gr.plan_id)',
+        ),
+      );
+      expect(mockGatewayRateRepo.query).toHaveBeenCalledWith(
+        expect.stringContaining('gr.plan_id AS "planId"'),
+      );
+      expect(mockGatewayRateRepo.query).toHaveBeenCalledWith(
+        expect.stringContaining(
+          'ORDER BY gr.gateway_id, gr.payment_method, gr.withdrawal_days, gr.plan_id, gr.created_at DESC',
+        ),
+      );
+    });
+
+    it('exposes planId on every rate row (null for all-plan rows, the plan uuid for plan-scoped rows)', async () => {
+      mockShippingConfigRepo.findOne.mockResolvedValue(null);
+      mockGatewayRateRepo.query.mockResolvedValue([
+        {
+          id: RATE_ID,
+          paymentMethod: 'tarjeta_debito_credito',
+          withdrawalDays: 14,
+          ratePercent: '3.49',
+          isActive: true,
+          planId: null,
+          gateway: mockGateway,
+        },
+        {
+          id: 'c0ffee00-0000-4000-8000-000000000001',
+          paymentMethod: 'tarjeta_debito_credito',
+          withdrawalDays: 14,
+          ratePercent: '2.99',
+          isActive: true,
+          planId: PLAN_ID,
+          gateway: mockGateway,
+        },
+      ]);
+
+      const result = await service.getAll();
+
+      expect(result.rates.map((r) => [r.planId, r.ratePercent])).toEqual([
+        [null, 3.49],
+        [PLAN_ID, 2.99],
+      ]);
+    });
+  });
+
+  // ---------------------------------------------------------------
+  // getGatewaysWithRates — same plan-aware query
+  // ---------------------------------------------------------------
+  describe('getGatewaysWithRates', () => {
+    it('uses the plan-aware DISTINCT ON query', async () => {
+      mockGatewayRepo.find.mockResolvedValue([mockGateway]);
+      mockGatewayRateRepo.query.mockResolvedValue([]);
+
+      await service.getGatewaysWithRates();
+
+      expect(mockGatewayRateRepo.query).toHaveBeenCalledWith(
+        expect.stringContaining(
+          'DISTINCT ON (gr.gateway_id, gr.payment_method, gr.withdrawal_days, gr.plan_id)',
+        ),
+      );
     });
   });
 });
