@@ -699,5 +699,31 @@ describe('CalculatorService', () => {
       expect(results[2].currentPrice).toBeNull();
       expect(results[2].result).toBeNull();
     });
+
+    it('returns null result (not a cost-0 margin) for a priced product without a BOM (WR-52)', async () => {
+      const costMap = new Map<string, ProductCostData>();
+      costMap.set(productIds[0], {
+        cost: 6534.48,
+        costBreakdown: [],
+        costWarnings: [],
+      });
+      // productIds[1] has a price (45000) but no cost entry
+      costsService.calculateAll.mockResolvedValue(costMap);
+
+      const results = await service.calcBatch({
+        gatewaySlug: TN_GATEWAY_PAGO_NUBE,
+        paymentMethod: TN_PAYMENT_TARJETA,
+        withdrawalDays: 14,
+        installments: 1,
+        planSlug: TN_PLAN_ESENCIAL,
+      });
+
+      expect(results).toHaveLength(3);
+      expect(results[0].result?.realProfit).toBe(59285.05);
+
+      expect(results[1].currentPrice).toBe(45000);
+      expect(results[1].cost).toBe(0);
+      expect(results[1].result).toBeNull();
+    });
   });
 });

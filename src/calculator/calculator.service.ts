@@ -149,7 +149,8 @@ export class CalculatorService {
   /**
    * Resolves the product cost used by forward/inverse. The stored cost wins over
    * a manual one; a product that exists but has no BOM cannot be priced yet.
-   * Not used by calcBatch, which intentionally skips cost-less products.
+   * Not used by calcBatch, which lists cost-less products with `result: null`
+   * (a batch must not fail because one product has no BOM).
    */
   async resolveProductCost(
     productId?: string,
@@ -353,6 +354,10 @@ export class CalculatorService {
     const results: CalcBatchItem[] = [];
 
     for (const product of products) {
+      // No BOM = no cost: the row still lists the product (cost 0, like the
+      // no-price case) but is never priced, or the batch would report a
+      // near-100 % margin for it (the same silent zero R8 removed from
+      // forward/inverse).
       const costData = costMap.get(product.id);
       const cost = costData?.cost ?? 0;
 
@@ -374,7 +379,12 @@ export class CalculatorService {
 
       let calcResult: CalcResult | null = null;
 
-      if (currentPrice !== null && !isNaN(currentPrice) && currentPrice > 0) {
+      if (
+        costData !== undefined &&
+        currentPrice !== null &&
+        !isNaN(currentPrice) &&
+        currentPrice > 0
+      ) {
         calcResult = this.calcForward({
           sellingPrice: currentPrice,
           shippingCharged: config.shipping?.defaultShippingCharged ?? 0,
