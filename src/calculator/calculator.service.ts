@@ -6,7 +6,10 @@ import {
   ParsedInstallmentRate,
   ParsedPlan,
 } from '../tiendanube-config/tiendanube-config.service';
-import { TN_GATEWAY_PAGO_NUBE } from '../constants/tiendanube';
+import {
+  TN_GATEWAY_PAGO_NUBE,
+  TN_PLAN_ESENCIAL,
+} from '../constants/tiendanube';
 import { CostsService } from '../costs/costs.service';
 import { ProductsService } from '../products/products.service';
 import {
@@ -78,14 +81,27 @@ export class CalculatorService {
       );
     }
 
-    // Find matching gateway rate
-    const matchedRate = config.rates.find((rate: ParsedGatewayRate) => {
-      return (
-        rate.gateway?.slug === gatewaySlug &&
-        rate.paymentMethod === paymentMethod &&
-        rate.withdrawalDays === withdrawalDays
-      );
-    });
+    // Plan first: the gateway rate depends on it. Omitted = Esencial, the same
+    // default ScenariosService and the front use (not plans[0], which is Escala).
+    const effectivePlanSlug = planSlug ?? TN_PLAN_ESENCIAL;
+    const plan = config.plans.find(
+      (p: ParsedPlan) => p.slug === effectivePlanSlug,
+    );
+
+    if (!plan) {
+      throw new NotFoundException(`Plan not found: ${effectivePlanSlug}`);
+    }
+
+    // Plan-specific row wins; the null-plan row is the "applies to every plan"
+    // fallback (D-05) that also serves gateways without per-plan fees.
+    const matchesTuple = (rate: ParsedGatewayRate): boolean =>
+      rate.gateway?.slug === gatewaySlug &&
+      rate.paymentMethod === paymentMethod &&
+      rate.withdrawalDays === withdrawalDays;
+
+    const matchedRate =
+      config.rates.find((r) => matchesTuple(r) && r.planId === plan.id) ??
+      config.rates.find((r) => matchesTuple(r) && r.planId === null);
 
     if (!matchedRate) {
       throw new NotFoundException(
@@ -107,15 +123,6 @@ export class CalculatorService {
     }
 
     const installmentRatePercent = matchedInstallment.ratePercent;
-
-    // Find plan for CPT rate
-    const plan = planSlug
-      ? config.plans.find((p: ParsedPlan) => p.slug === planSlug)
-      : config.plans[0];
-
-    if (!plan) {
-      throw new NotFoundException(`Plan not found: ${planSlug ?? 'default'}`);
-    }
 
     // CPT depends on gateway: pago_nube uses cptPagoNube, others use cptOtherGateways
     const cptRate =
