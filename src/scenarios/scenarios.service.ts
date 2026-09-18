@@ -14,7 +14,7 @@ import {
   ScenarioCalcResponse,
   ScenarioProductResult,
 } from './dto/scenario-response.dto';
-import { CalculadoraService } from '../calculadora/calculadora.service';
+import { CalculatorService } from '../calculator/calculator.service';
 import { CostsService } from '../costs/costs.service';
 import { ProductsService } from '../products/products.service';
 import { TiendanubeConfigService } from '../tiendanube-config/tiendanube-config.service';
@@ -22,7 +22,7 @@ import type { Permissions } from '../common/types/permission';
 import { User } from '../users/entities/user.entity';
 import { TnPlan } from '../tiendanube-config/entities/tn-plan.entity';
 import { Product } from '../products/entities/product.entity';
-import { CalcResult } from '../calculadora/dto/calc-result.dto';
+import { CalcResult } from '../calculator/dto/calc-result.dto';
 import {
   TN_GATEWAY_PAGO_NUBE,
   TN_PAYMENT_TARJETA,
@@ -36,7 +36,7 @@ export class ScenariosService {
     private readonly scenarioRepo: Repository<Scenario>,
     @InjectRepository(ScenarioOverride)
     private readonly overrideRepo: Repository<ScenarioOverride>,
-    private readonly calculadoraService: CalculadoraService,
+    private readonly calculatorService: CalculatorService,
     private readonly costsService: CostsService,
     private readonly productsService: ProductsService,
     private readonly tiendanubeConfigService: TiendanubeConfigService,
@@ -316,10 +316,11 @@ export class ScenariosService {
 
       if (effectivePrice !== null && effectivePrice > 0) {
         try {
-          simResult = this.calculadoraService.calcForward({
-            precioVenta: effectivePrice,
-            costoEnvio: 0,
-            costoProducto: cost,
+          simResult = this.calculatorService.calcForward({
+            sellingPrice: effectivePrice,
+            shippingCharged: 0,
+            shippingCost: 0,
+            productCost: cost,
             gatewaySlug,
             paymentMethod,
             withdrawalDays,
@@ -334,10 +335,11 @@ export class ScenariosService {
 
       if (realPrice !== null && realPrice > 0) {
         try {
-          realResult = this.calculadoraService.calcForward({
-            precioVenta: realPrice,
-            costoEnvio: 0,
-            costoProducto: cost,
+          realResult = this.calculatorService.calcForward({
+            sellingPrice: realPrice,
+            shippingCharged: 0,
+            shippingCost: 0,
+            productCost: cost,
             gatewaySlug,
             paymentMethod,
             withdrawalDays,

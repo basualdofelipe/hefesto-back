@@ -1,4 +1,4 @@
-import { CalcResult } from '../../calculadora/dto/calc-result.dto';
+import { CalcResult } from '../../calculator/dto/calc-result.dto';
 
 export interface ScenarioProductResult {
   productId: string;

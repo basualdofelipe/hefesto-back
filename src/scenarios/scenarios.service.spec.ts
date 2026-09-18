@@ -7,7 +7,7 @@ import { QueryRunner } from 'typeorm';
 import { ScenariosService } from './scenarios.service';
 import { Scenario } from './entities/scenario.entity';
 import { ScenarioOverride } from './entities/scenario-override.entity';
-import { CalculadoraService } from '../calculadora/calculadora.service';
+import { CalculatorService } from '../calculator/calculator.service';
 import { CostsService } from '../costs/costs.service';
 import { ProductsService } from '../products/products.service';
 import { TiendanubeConfigService } from '../tiendanube-config/tiendanube-config.service';
@@ -30,7 +30,7 @@ describe('ScenariosService', () => {
     delete: jest.fn(),
   };
 
-  const mockCalculadoraService = {
+  const mockCalculatorService = {
     calcForward: jest.fn(),
   };
 
@@ -62,8 +62,8 @@ describe('ScenariosService', () => {
           useValue: mockOverrideRepo,
         },
         {
-          provide: CalculadoraService,
-          useValue: mockCalculadoraService,
+          provide: CalculatorService,
+          useValue: mockCalculatorService,
         },
         {
           provide: CostsService,
@@ -214,14 +214,14 @@ describe('ScenariosService', () => {
         },
       ]);
 
-      const mockCalcResult = { gananciaReal: 50000, margen: 52.6 };
-      mockCalculadoraService.calcForward.mockReturnValue(mockCalcResult);
+      const mockCalcResult = { realProfit: 50000, marginPercent: 52.6 };
+      mockCalculatorService.calcForward.mockReturnValue(mockCalcResult);
 
       // Act
       const result = await service.calculate('scenario-1', USER_ID);
 
       // Assert
-      expect(mockCalculadoraService.calcForward).toHaveBeenCalled();
+      expect(mockCalculatorService.calcForward).toHaveBeenCalled();
       expect(mockProductsService.findAll).toHaveBeenCalledWith(true); // includes inactive
       expect(result.results).toHaveLength(1);
       expect(result.results[0].overridePrice).toBe(95000);
@@ -282,15 +282,15 @@ describe('ScenariosService', () => {
 
       // Call order: sim(prod-1), real(prod-1), sim(prod-2), real(prod-2)
       // prod-1 sim throws, prod-1 real also throws, prod-2 sim succeeds, prod-2 real succeeds
-      mockCalculadoraService.calcForward
+      mockCalculatorService.calcForward
         .mockImplementationOnce(() => {
           throw new Error('bad config');
         })
         .mockImplementationOnce(() => {
           throw new Error('bad config');
         })
-        .mockReturnValueOnce({ gananciaReal: 20000, margen: 40 })
-        .mockReturnValueOnce({ gananciaReal: 20000, margen: 40 });
+        .mockReturnValueOnce({ realProfit: 20000, marginPercent: 40 })
+        .mockReturnValueOnce({ realProfit: 20000, marginPercent: 40 });
 
       const result = await service.calculate('scenario-1', USER_ID);
 
@@ -298,8 +298,8 @@ describe('ScenariosService', () => {
       expect(result.results[0].simResult).toBeNull(); // error product gets null
       expect(result.results[0].realResult).toBeNull(); // error product real also null
       expect(result.results[1].simResult).toEqual({
-        gananciaReal: 20000,
-        margen: 40,
+        realProfit: 20000,
+        marginPercent: 40,
       }); // other product OK
     });
   });

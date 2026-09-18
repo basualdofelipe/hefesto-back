@@ -1,4 +1,10 @@
-import { BadRequestException, Body, Controller, Post } from '@nestjs/common';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  HttpCode,
+  Post,
+} from '@nestjs/common';
 import {
   ApiBearerAuth,
   ApiOperation,
@@ -8,7 +14,7 @@ import {
 import { RequirePermission } from '../auth/decorators/require-permission.decorator';
 import { TiendanubeConfigService } from '../tiendanube-config/tiendanube-config.service';
 import { CostsService } from '../costs/costs.service';
-import { CalculadoraService } from './calculadora.service';
+import { CalculatorService } from './calculator.service';
 import { CalcForwardDto } from './dto/calc-forward.dto';
 import { CalcInverseDto } from './dto/calc-inverse.dto';
 import { CalcBatchDto } from './dto/calc-batch.dto';
@@ -19,17 +25,18 @@ import {
   CalcError,
 } from './dto/calc-result.dto';
 
-@ApiTags('calculadora')
+@ApiTags('calculator')
 @ApiBearerAuth()
-@Controller('calculadora')
-export class CalculadoraController {
+@Controller('calculator')
+export class CalculatorController {
   constructor(
-    private readonly calculadoraService: CalculadoraService,
+    private readonly calculatorService: CalculatorService,
     private readonly tiendanubeConfigService: TiendanubeConfigService,
     private readonly costsService: CostsService,
   ) {}
 
   @Post('forward')
+  @HttpCode(200)
   @RequirePermission('can_use_calculator')
   @ApiOperation({
     summary: 'Calcular ganancia real a partir de precio de venta (forward)',
@@ -47,21 +54,22 @@ export class CalculadoraController {
     const config = await this.tiendanubeConfigService.getAll();
 
     // If productId provided, fetch cost from DB
-    let costoProducto = dto.costoProducto ?? 0;
+    let productCost = dto.productCost ?? 0;
     if (dto.productId) {
       const costData = await this.costsService.calculateForProduct(
         dto.productId,
       );
       if (costData) {
-        costoProducto = costData.cost;
+        productCost = costData.cost;
       }
     }
 
     // Return CalcResult directly -- ResponseInterceptor wraps to { data: CalcResult }
-    return this.calculadoraService.calcForward({
-      precioVenta: dto.precioVenta,
-      costoEnvio: dto.costoEnvio,
-      costoProducto,
+    return this.calculatorService.calcForward({
+      sellingPrice: dto.sellingPrice,
+      shippingCharged: dto.shippingCharged,
+      shippingCost: dto.shippingCost,
+      productCost,
       gatewaySlug: dto.gatewaySlug,
       paymentMethod: dto.paymentMethod,
       withdrawalDays: dto.withdrawalDays,
@@ -72,6 +80,7 @@ export class CalculadoraController {
   }
 
   @Post('inverse')
+  @HttpCode(200)
   @RequirePermission('can_use_calculator')
   @ApiOperation({
     summary:
@@ -94,20 +103,21 @@ export class CalculadoraController {
     const config = await this.tiendanubeConfigService.getAll();
 
     // If productId provided, fetch cost from DB
-    let costoProducto = dto.costoProducto ?? 0;
+    let productCost = dto.productCost ?? 0;
     if (dto.productId) {
       const costData = await this.costsService.calculateForProduct(
         dto.productId,
       );
       if (costData) {
-        costoProducto = costData.cost;
+        productCost = costData.cost;
       }
     }
 
-    const result = this.calculadoraService.calcInverse({
-      gananciaDeseada: dto.gananciaDeseada,
-      costoEnvio: dto.costoEnvio,
-      costoProducto,
+    const result = this.calculatorService.calcInverse({
+      targetProfit: dto.targetProfit,
+      shippingCharged: dto.shippingCharged,
+      shippingCost: dto.shippingCost,
+      productCost,
       gatewaySlug: dto.gatewaySlug,
       paymentMethod: dto.paymentMethod,
       withdrawalDays: dto.withdrawalDays,
@@ -126,6 +136,7 @@ export class CalculadoraController {
   }
 
   @Post('batch')
+  @HttpCode(200)
   @RequirePermission('can_use_calculator')
   @ApiOperation({
     summary: 'Calcular margenes de todos los productos (batch)',
@@ -141,7 +152,7 @@ export class CalculadoraController {
   })
   async batch(@Body() dto: CalcBatchDto): Promise<CalcBatchItem[]> {
     // Return CalcBatchItem[] directly -- ResponseInterceptor wraps to { data: CalcBatchItem[] }
-    return this.calculadoraService.calcBatch({
+    return this.calculatorService.calcBatch({
       gatewaySlug: dto.gatewaySlug,
       paymentMethod: dto.paymentMethod,
       withdrawalDays: dto.withdrawalDays,

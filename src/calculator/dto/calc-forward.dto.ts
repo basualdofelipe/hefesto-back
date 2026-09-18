@@ -8,7 +8,7 @@ import {
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
-export class CalcInverseDto {
+export class CalcForwardDto {
   @ApiPropertyOptional({
     description: 'Product UUID -- if provided, cost fetched from DB',
   })
@@ -16,15 +16,29 @@ export class CalcInverseDto {
   @IsUUID()
   productId?: string;
 
-  @ApiProperty({ description: 'Desired profit per unit', example: 50000 })
+  @ApiProperty({
+    description: 'Selling price (without shipping)',
+    example: 87000,
+  })
   @IsNumber()
   @IsPositive()
-  gananciaDeseada!: number;
+  sellingPrice!: number;
 
-  @ApiProperty({ description: 'Shipping cost (with IVA)', example: 7315 })
+  @ApiProperty({
+    description: 'Shipping charged to the customer',
+    example: 7315,
+  })
   @IsNumber()
-  @Min(0)
-  costoEnvio!: number;
+  @Min(0, { message: 'El envío no puede ser negativo' })
+  shippingCharged!: number;
+
+  @ApiProperty({
+    description: 'Shipping cost paid to the carrier (with IVA)',
+    example: 7315,
+  })
+  @IsNumber()
+  @Min(0, { message: 'El envío no puede ser negativo' })
+  shippingCost!: number;
 
   @ApiPropertyOptional({
     description: 'Product cost (without IVA) -- used if no productId',
@@ -33,20 +47,23 @@ export class CalcInverseDto {
   @IsOptional()
   @IsNumber()
   @Min(0)
-  costoProducto?: number;
+  productCost?: number;
 
-  @ApiProperty({ description: 'Gateway slug', example: 'pago_nube' })
+  @ApiProperty({
+    description: 'Gateway slug (e.g., pago_nube, mercado_pago, modo)',
+    example: 'pago_nube',
+  })
   @IsString()
   gatewaySlug!: string;
 
   @ApiProperty({
-    description: 'Payment method',
+    description: 'Payment method (e.g., tarjeta_debito_credito, transferencia)',
     example: 'tarjeta_debito_credito',
   })
   @IsString()
   paymentMethod!: string;
 
-  @ApiProperty({ description: 'Withdrawal days', example: 14 })
+  @ApiProperty({ description: 'Withdrawal days (0, 1, 7, 14)', example: 14 })
   @IsNumber()
   @Min(0)
   withdrawalDays!: number;
@@ -61,7 +78,7 @@ export class CalcInverseDto {
   installments: number = 1;
 
   @ApiPropertyOptional({
-    description: 'Plan slug override',
+    description: 'Plan slug override (defaults to admin current plan)',
     example: 'esencial',
   })
   @IsOptional()

@@ -16,6 +16,9 @@ import {
   CalcError,
 } from './dto/calc-result.dto';
 
+export const PRODUCT_COST_REQUIRED_MESSAGE =
+  'Definí el costo del producto primero';
+
 interface ResolvedRates {
   gatewayRate: number;
   installmentRate: number;
@@ -25,9 +28,10 @@ interface ResolvedRates {
 }
 
 interface CalcForwardParams {
-  precioVenta: number;
-  costoEnvio: number;
-  costoProducto: number;
+  sellingPrice: number;
+  shippingCharged: number;
+  shippingCost: number;
+  productCost: number;
   gatewaySlug: string;
   paymentMethod: string;
   withdrawalDays: number;
@@ -37,9 +41,10 @@ interface CalcForwardParams {
 }
 
 interface CalcInverseParams {
-  gananciaDeseada: number;
-  costoEnvio: number;
-  costoProducto: number;
+  targetProfit: number;
+  shippingCharged: number;
+  shippingCost: number;
+  productCost: number;
   gatewaySlug: string;
   paymentMethod: string;
   withdrawalDays: number;
@@ -49,7 +54,7 @@ interface CalcInverseParams {
 }
 
 @Injectable()
-export class CalculadoraService {
+export class CalculatorService {
   constructor(
     private readonly tiendanubeConfigService: TiendanubeConfigService,
     private readonly costsService: CostsService,
@@ -118,23 +123,24 @@ export class CalculadoraService {
         ? plan.cptPagoNube
         : plan.cptOtherGateways;
 
-    // IVA/IIBB stored as percentages (21, 3.5), formulas need fractions (0.21, 0.035)
+    // IVA/IIBB are stored as percentages; the formula needs fractions
     return {
-      gatewayRate: gatewayRatePercent, // stays as percentage (3.49) -- divided by 100 in formula
+      gatewayRate: gatewayRatePercent, // stays as percentage -- divided by 100 in formula
       installmentRate: installmentRatePercent, // stays as percentage -- divided by 100 in formula
-      ivaRate: config.taxConfig.ivaRate / 100, // 21 -> 0.21 (fraction)
-      iibbRate: config.taxConfig.iibbRate / 100, // 3.5 -> 0.035 (fraction)
+      ivaRate: config.taxConfig.ivaRate / 100,
+      iibbRate: config.taxConfig.iibbRate / 100,
       cptRate, // stays as percentage -- divided by 100 in formula
     };
   }
 
-  // ─── calcForward: price -> profit (14-step formula) ─────────────
+  // ─── calcForward: price -> profit ───────────────────────────────
 
   calcForward(params: CalcForwardParams): CalcResult {
     const {
-      precioVenta,
-      costoEnvio,
-      costoProducto,
+      sellingPrice,
+      shippingCharged,
+      shippingCost,
+      productCost,
       gatewaySlug,
       paymentMethod,
       withdrawalDays,
@@ -152,98 +158,104 @@ export class CalculadoraService {
       planSlug,
     );
 
-    // Step 1: Total paid by client
-    const totalCliente = precioVenta + costoEnvio;
+    // Step 1: Total paid by the customer (shipping charged enters every fee base)
+    const customerTotal = sellingPrice + shippingCharged;
 
     // Step 2: Gateway base rate
-    const tasaBase = rates.gatewayRate;
+    const baseRate = rates.gatewayRate;
 
-    // Step 3: Rate with IVA (ivaRate is already a fraction: 0.21)
-    const tasaConIVA = tasaBase * (1 + rates.ivaRate);
+    // Step 3: Rate with IVA (ivaRate is already a fraction)
+    const rateWithIva = baseRate * (1 + rates.ivaRate);
 
-    // Step 4: Gateway commission
-    const comisionPasarela = totalCliente * (tasaConIVA / 100);
+    // Step 4: Gateway fee
+    const gatewayFee = customerTotal * (rateWithIva / 100);
 
-    // Step 5: Installment financing cost
-    const tasaCuotas = rates.installmentRate;
-    const costoFinanciacion = totalCliente * (tasaCuotas / 100);
+    // Step 5: Installment financing cost (rate applied as configured)
+    const installmentRate = rates.installmentRate;
+    const financingCost = customerTotal * (installmentRate / 100);
 
-    // Step 6: CPT (Tiendanube transaction cost)
-    const cpt = totalCliente * (rates.cptRate / 100);
+    // Step 6: CPT (Tiendanube transaction cost, rate applied as configured)
+    const cpt = customerTotal * (rates.cptRate / 100);
 
-    // Step 7: IVA calculations
-    const baseGravada = totalCliente / (1 + rates.ivaRate);
-    const ivaDebito = totalCliente - baseGravada;
-    const ivaCreditoProducto = costoProducto * rates.ivaRate;
-    const ivaCreditoComision =
-      comisionPasarela * (rates.ivaRate / (1 + rates.ivaRate));
-    const ivaNeto = ivaDebito - ivaCreditoProducto - ivaCreditoComision;
+    // Step 7: IVA -- shipping cost is paid with IVA, so its IVA is a fiscal credit
+    const taxableBase = customerTotal / (1 + rates.ivaRate);
+    const ivaDebit = customerTotal - taxableBase;
+    const ivaCreditProduct = productCost * rates.ivaRate;
+    const ivaCreditGatewayFee =
+      gatewayFee * (rates.ivaRate / (1 + rates.ivaRate));
+    const ivaCreditShipping =
+      shippingCost * (rates.ivaRate / (1 + rates.ivaRate));
+    const ivaNet =
+      ivaDebit - ivaCreditProduct - ivaCreditGatewayFee - ivaCreditShipping;
 
-    // Step 8: IIBB retention (iibbRate is already a fraction: 0.035)
-    const retencionIIBB = totalCliente * rates.iibbRate;
+    // Step 8: IIBB withholding (iibbRate is already a fraction)
+    const iibbWithholding = customerTotal * rates.iibbRate;
 
-    // Step 9: Net received from gateway (subtract CPT too)
-    const netoRecibido =
-      totalCliente - comisionPasarela - costoFinanciacion - retencionIIBB - cpt;
+    // Step 9: Net received from the gateway
+    const netReceived =
+      customerTotal - gatewayFee - financingCost - iibbWithholding - cpt;
 
     // Step 10: Product cost with IVA
-    const costoProductoConIVA = costoProducto * (1 + rates.ivaRate);
+    const productCostWithIva = productCost * (1 + rates.ivaRate);
 
-    // Step 11: Real profit
-    const gananciaReal = netoRecibido - costoProductoConIVA - ivaNeto;
+    // Step 11: Real profit -- the full shipping cost is a cost; its IVA comes back via ivaNet
+    const realProfit = netReceived - productCostWithIva - shippingCost - ivaNet;
 
-    // Step 12: Margin percentage
-    const margen = precioVenta > 0 ? (gananciaReal / precioVenta) * 100 : 0;
+    // Step 12: Margin over the selling price (shipping excluded)
+    const marginPercent =
+      sellingPrice > 0 ? (realProfit / sellingPrice) * 100 : 0;
 
-    // Round only final values (per CONTEXT.md -- NO intermediate rounding)
+    // Round once at the end of the chain; intermediates stay exact
     return {
-      totalCliente,
-      tasaBase,
-      tasaConIVA,
-      comisionPasarela,
-      tasaCuotas,
-      costoFinanciacion,
+      customerTotal,
+      baseRate,
+      rateWithIva,
+      gatewayFee,
+      installmentRate,
+      financingCost,
       cpt,
-      baseGravada,
-      ivaDebito,
-      ivaCreditoProducto,
-      ivaCreditoComision,
-      ivaNeto,
-      retencionIIBB,
-      netoRecibido,
-      costoProductoConIVA,
-      gananciaReal: Math.round(gananciaReal * 100) / 100,
-      margen: Math.round(margen * 100) / 100,
+      taxableBase,
+      ivaDebit,
+      ivaCreditProduct,
+      ivaCreditGatewayFee,
+      ivaCreditShipping,
+      ivaNet,
+      iibbWithholding,
+      netReceived,
+      productCostWithIva,
+      shippingCost,
+      realProfit: Math.round(realProfit * 100) / 100,
+      marginPercent: Math.round(marginPercent * 100) / 100,
     };
   }
 
   // ─── calcInverse: profit -> price (binary search) ───────────────
 
   calcInverse(params: CalcInverseParams): CalcInverseResult | CalcError {
-    const { gananciaDeseada, costoProducto } = params;
+    const { targetProfit, productCost } = params;
 
-    // Edge case validations
-    if (costoProducto <= 0) {
-      return { error: true, message: 'Defini el costo del producto primero' };
+    if (productCost <= 0) {
+      return { error: true, message: PRODUCT_COST_REQUIRED_MESSAGE };
     }
 
-    if (gananciaDeseada < 0) {
+    if (targetProfit < 0) {
       return {
         error: true,
-        message: 'La ganancia deseada debe ser positiva',
+        message: 'La ganancia deseada no puede ser negativa',
       };
     }
 
-    // Binary search bounds
-    let low = costoProducto;
-    let high = Math.max(costoProducto * 20, 100000);
+    // Bracket assumes forward(productCost) is below the target; when shipping charged
+    // far exceeds shipping cost that can be false and the search converges to `low`.
+    let low = productCost;
+    let high = Math.max(productCost * 20, 100000);
 
     // Check if target is reachable at upper bound
     const upperResult = this.calcForward({
       ...params,
-      precioVenta: high,
+      sellingPrice: high,
     });
-    if (upperResult.gananciaReal < gananciaDeseada) {
+    if (upperResult.realProfit < targetProfit) {
       return {
         error: true,
         message: 'Ganancia inalcanzable con estas tasas',
@@ -259,10 +271,10 @@ export class CalculadoraService {
       mid = (low + high) / 2;
       result = this.calcForward({
         ...params,
-        precioVenta: mid,
+        sellingPrice: mid,
       });
 
-      if (result.gananciaReal < gananciaDeseada) {
+      if (result.realProfit < targetProfit) {
         low = mid;
       } else {
         high = mid;
@@ -272,7 +284,7 @@ export class CalculadoraService {
 
     return {
       ...result,
-      precioVenta: Math.round(mid * 100) / 100,
+      requiredSellingPrice: Math.round(mid * 100) / 100,
     };
   }
 
@@ -300,8 +312,7 @@ export class CalculadoraService {
       const costData = costMap.get(product.id);
       const cost = costData?.cost ?? 0;
 
-      // CRITICAL: currentPrice is a STRING from TypeORM decimal column
-      // parseFloat converts it to number. If null or invalid, skip.
+      // currentPrice is a string: TypeORM returns decimal columns as strings
       const currentPriceRaw = product.currentPrice;
       const currentPrice =
         currentPriceRaw !== null && currentPriceRaw !== undefined
@@ -321,9 +332,10 @@ export class CalculadoraService {
 
       if (currentPrice !== null && !isNaN(currentPrice) && currentPrice > 0) {
         calcResult = this.calcForward({
-          precioVenta: currentPrice,
-          costoEnvio: 0, // batch mode: no shipping cost
-          costoProducto: cost,
+          sellingPrice: currentPrice,
+          shippingCharged: 0,
+          shippingCost: 0,
+          productCost: cost,
           gatewaySlug: dto.gatewaySlug,
           paymentMethod: dto.paymentMethod,
           withdrawalDays: dto.withdrawalDays,
