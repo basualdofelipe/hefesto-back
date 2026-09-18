@@ -1,6 +1,7 @@
 import {
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -31,6 +32,8 @@ import {
 
 @Injectable()
 export class ScenariosService {
+  private readonly logger = new Logger(ScenariosService.name);
+
   constructor(
     @InjectRepository(Scenario)
     private readonly scenarioRepo: Repository<Scenario>,
@@ -256,6 +259,32 @@ export class ScenariosService {
 
   // ─── Calculate margins for all products in scenario ───────────
 
+  /**
+   * A per-product calc failure must not abort the whole margin table, but it
+   * must leave a trace: resolveRates throws NotFoundException for a missing
+   * plan or rate tuple (e.g. a scenario stored with withdrawal_days = NULL
+   * resolves to 1 d, which Pago Nube tarjeta has no row for), and a silent
+   * null would hide that config gap behind a dash in the UI.
+   */
+  private calcForwardOrNull(
+    params: Parameters<CalculatorService['calcForward']>[0],
+    context: { scenarioId: string; productId: string; kind: 'sim' | 'real' },
+  ): CalcResult | null {
+    try {
+      return this.calculatorService.calcForward(params);
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      this.logger.warn(
+        `calcForward (${context.kind}) failed for product ${context.productId} ` +
+          `in scenario ${context.scenarioId} ` +
+          `[${params.gatewaySlug}/${params.paymentMethod}/${params.withdrawalDays}d` +
+          `/x${params.installments}/${params.planSlug ?? 'default'}]: ${reason}; ` +
+          'result set to null',
+      );
+      return null;
+    }
+  }
+
   async calculate(id: string, userId: string): Promise<ScenarioCalcResponse> {
     // Load scenario with overrides
     const scenario = await this.findOne(id, userId);
@@ -316,8 +345,8 @@ export class ScenariosService {
       let realResult: CalcResult | null = null;
 
       if (effectivePrice !== null && effectivePrice > 0) {
-        try {
-          simResult = this.calculatorService.calcForward({
+        simResult = this.calcForwardOrNull(
+          {
             sellingPrice: effectivePrice,
             shippingCharged,
             shippingCost,
@@ -328,15 +357,14 @@ export class ScenariosService {
             installments,
             planSlug,
             config,
-          });
-        } catch {
-          simResult = null; // per-product failure -- don't crash the loop
-        }
+          },
+          { scenarioId: scenario.id, productId: product.id, kind: 'sim' },
+        );
       }
 
       if (realPrice !== null && realPrice > 0) {
-        try {
-          realResult = this.calculatorService.calcForward({
+        realResult = this.calcForwardOrNull(
+          {
             sellingPrice: realPrice,
             shippingCharged,
             shippingCost,
@@ -347,10 +375,9 @@ export class ScenariosService {
             installments,
             planSlug,
             config,
-          });
-        } catch {
-          realResult = null;
-        }
+          },
+          { scenarioId: scenario.id, productId: product.id, kind: 'real' },
+        );
       }
 
       results.push({

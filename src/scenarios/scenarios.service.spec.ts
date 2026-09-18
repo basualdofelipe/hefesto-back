@@ -1,6 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { ConflictException, NotFoundException } from '@nestjs/common';
+import { ConflictException, Logger, NotFoundException } from '@nestjs/common';
 import { QueryRunner } from 'typeorm';
 
 // These imports will resolve after Task 1 creates the files
@@ -323,7 +323,10 @@ describe('ScenariosService', () => {
       });
     });
 
-    it('should handle calcForward errors per product without crashing the loop', async () => {
+    it('should handle calcForward errors per product without crashing the loop, logging each failure', async () => {
+      const warnSpy = jest
+        .spyOn(Logger.prototype, 'warn')
+        .mockImplementation(() => undefined);
       const scenario = {
         id: 'scenario-1',
         name: 'Test',
@@ -395,6 +398,15 @@ describe('ScenariosService', () => {
         realProfit: 20000,
         marginPercent: 40,
       }); // other product OK
+
+      // WR-02: a swallowed calc error must leave a trace with product + cause
+      expect(warnSpy).toHaveBeenCalledTimes(2);
+      for (const [message] of warnSpy.mock.calls) {
+        expect(message).toContain('prod-1');
+        expect(message).toContain('scenario-1');
+        expect(message).toContain('bad config');
+      }
+      warnSpy.mockRestore();
     });
   });
 
