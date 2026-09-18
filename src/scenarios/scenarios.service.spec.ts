@@ -229,6 +229,100 @@ describe('ScenariosService', () => {
       expect(result.results[0].simResult).toEqual(mockCalcResult);
     });
 
+    // R2 / D-03: the configured shipping default reaches BOTH calcForward calls
+    describe('configured shipping default', () => {
+      const scenario = {
+        id: 'scenario-1',
+        name: 'Test',
+        gatewaySlug: 'pago_nube',
+        paymentMethod: 'tarjeta_debito_credito',
+        withdrawalDays: 1,
+        installments: 1,
+        plan: { slug: 'esencial' },
+        overrides: [{ product: { id: 'prod-1' }, overridePrice: '95000' }],
+        user: { id: USER_ID },
+        isPublic: false,
+      };
+      const baseConfig = {
+        gateways: [],
+        rates: [],
+        installments: [],
+        taxConfig: null,
+        plans: [],
+      };
+
+      beforeEach(() => {
+        mockScenarioRepo.findOne.mockResolvedValue(scenario);
+        mockCostsService.calculateAll.mockResolvedValue(
+          new Map([['prod-1', { cost: 30000 }]]),
+        );
+        mockProductsService.findAll.mockResolvedValue([
+          {
+            id: 'prod-1',
+            currentPrice: '80000',
+            isActive: true,
+            type: { name: 'Billetera' },
+            name: { name: 'Hefesto' },
+            finish: { name: 'Lisa' },
+            color: { name: 'Marron' },
+            size: null,
+          },
+        ]);
+        mockCalculatorService.calcForward.mockReturnValue({
+          realProfit: 50000,
+          marginPercent: 52.6,
+        });
+      });
+
+      it('passes shippingCharged/shippingCost 7315 to both the override (sim) and real calcForward calls', async () => {
+        mockTiendanubeConfigService.getAll.mockResolvedValue({
+          ...baseConfig,
+          shipping: { defaultShippingCost: 7315, defaultShippingCharged: 7315 },
+        });
+
+        await service.calculate('scenario-1', USER_ID);
+
+        expect(mockCalculatorService.calcForward).toHaveBeenCalledWith(
+          expect.objectContaining({
+            sellingPrice: 95000,
+            shippingCharged: 7315,
+            shippingCost: 7315,
+          }),
+        );
+        expect(mockCalculatorService.calcForward).toHaveBeenCalledWith(
+          expect.objectContaining({
+            sellingPrice: 80000,
+            shippingCharged: 7315,
+            shippingCost: 7315,
+          }),
+        );
+      });
+
+      it('passes shippingCharged/shippingCost 0 to both calls when no shipping default is configured', async () => {
+        mockTiendanubeConfigService.getAll.mockResolvedValue({
+          ...baseConfig,
+          shipping: null,
+        });
+
+        await service.calculate('scenario-1', USER_ID);
+
+        expect(mockCalculatorService.calcForward).toHaveBeenCalledWith(
+          expect.objectContaining({
+            sellingPrice: 95000,
+            shippingCharged: 0,
+            shippingCost: 0,
+          }),
+        );
+        expect(mockCalculatorService.calcForward).toHaveBeenCalledWith(
+          expect.objectContaining({
+            sellingPrice: 80000,
+            shippingCharged: 0,
+            shippingCost: 0,
+          }),
+        );
+      });
+    });
+
     it('should handle calcForward errors per product without crashing the loop', async () => {
       const scenario = {
         id: 'scenario-1',

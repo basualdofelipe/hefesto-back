@@ -91,6 +91,15 @@ const mockConfigIva105: TiendanubeConfigAll = {
   } as TiendanubeConfigAll['taxConfig'],
 };
 
+// Configured shipping default 7315 / 7315 (case A shipping applied to the batch)
+const mockConfigShipping7315: TiendanubeConfigAll = {
+  ...mockConfig,
+  shipping: {
+    defaultShippingCost: 7315,
+    defaultShippingCharged: 7315,
+  } as TiendanubeConfigAll['shipping'],
+};
+
 // Shared params for the SPEC reference cases (PN tarjeta 14 d, 1 installment, Esencial)
 const BASE = {
   productCost: 6534.48,
@@ -112,6 +121,7 @@ describe('CalculatorService', () => {
   let service: CalculatorService;
   let costsService: jest.Mocked<CostsService>;
   let productsService: jest.Mocked<ProductsService>;
+  let tiendanubeConfigService: jest.Mocked<TiendanubeConfigService>;
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
@@ -142,6 +152,7 @@ describe('CalculatorService', () => {
     service = module.get<CalculatorService>(CalculatorService);
     costsService = module.get(CostsService);
     productsService = module.get(ProductsService);
+    tiendanubeConfigService = module.get(TiendanubeConfigService);
   });
 
   // ─── calcForward: SPEC reference cases A–D (literals copied from the SPEC table) ──
@@ -405,7 +416,7 @@ describe('CalculatorService', () => {
       costsService.calculateAll.mockResolvedValue(costMap);
     });
 
-    it('returns the case-D profit for the 87000 product (batch has zero shipping)', async () => {
+    it('returns the case-D profit for the 87000 product when no shipping default is configured (shipping null → 0/0)', async () => {
       const results: CalcBatchItem[] = await service.calcBatch({
         gatewaySlug: TN_GATEWAY_PAGO_NUBE,
         paymentMethod: TN_PAYMENT_TARJETA,
@@ -422,6 +433,24 @@ describe('CalculatorService', () => {
       expect(hefesto.cost).toBe(6534.48);
       expect(hefesto.result?.realProfit).toBe(59285.05);
       expect(hefesto.result?.marginPercent).toBe(68.14);
+      expect(hefesto.result?.shippingCost).toBe(0);
+    });
+
+    it('applies the configured default shipping 7315/7315: the 87000 product returns the case-A profit 58773.73', async () => {
+      tiendanubeConfigService.getAll.mockResolvedValue(mockConfigShipping7315);
+
+      const results: CalcBatchItem[] = await service.calcBatch({
+        gatewaySlug: TN_GATEWAY_PAGO_NUBE,
+        paymentMethod: TN_PAYMENT_TARJETA,
+        withdrawalDays: 14,
+        installments: 1,
+        planSlug: TN_PLAN_ESENCIAL,
+      });
+
+      const hefesto = results[0];
+      expect(hefesto.result?.realProfit).toBe(58773.73);
+      expect(hefesto.result?.marginPercent).toBe(67.56);
+      expect(hefesto.result?.shippingCost).toBe(7315);
     });
 
     it('parses string prices to numbers and returns null result for products without a price', async () => {
