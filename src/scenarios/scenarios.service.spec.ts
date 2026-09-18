@@ -170,7 +170,7 @@ describe('ScenariosService', () => {
 
   // SCEN-03: Calculate delegates to calcForward and includes inactive products
   describe('calculate', () => {
-    it('should call calculadoraService.calcForward for each product with effective price', async () => {
+    it('should call calculatorService.calcForward for each product with effective price', async () => {
       // Arrange
       const scenario = {
         id: 'scenario-1',
@@ -200,7 +200,7 @@ describe('ScenariosService', () => {
         new Map([['prod-1', { cost: 30000 }]]),
       );
 
-      // NOTE: findAll(true) -- includes inactive products (review fix)
+      // findAll(true) includes inactive products
       mockProductsService.findAll.mockResolvedValue([
         {
           id: 'prod-1',

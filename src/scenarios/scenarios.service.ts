@@ -222,7 +222,7 @@ export class ScenariosService {
       throw new NotFoundException('Escenario no encontrado');
     }
 
-    // CRITICAL: Wrap delete+insert in a transaction (review fix)
+    // Delete + insert in one transaction so a failed insert never leaves the scenario without overrides
     const queryRunner =
       this.scenarioRepo.manager.connection.createQueryRunner();
     await queryRunner.connect();
@@ -266,7 +266,7 @@ export class ScenariosService {
     // Load all product costs
     const costMap = await this.costsService.calculateAll();
 
-    // CRITICAL: Load ALL products including inactive (review fix)
+    // Include inactive products: a scenario may override a product deactivated after it was saved
     const products = await this.productsService.findAll(true);
 
     // Build override map: productId -> overridePrice (number)
@@ -289,7 +289,7 @@ export class ScenariosService {
     for (const product of products) {
       const cost = costMap.get(product.id)?.cost ?? 0;
 
-      // CRITICAL: currentPrice is STRING from TypeORM decimal column
+      // currentPrice is a string: TypeORM returns decimal columns as strings
       const realPrice =
         product.currentPrice !== null && product.currentPrice !== undefined
           ? parseFloat(product.currentPrice as string)
@@ -310,7 +310,6 @@ export class ScenariosService {
 
       const productType = product.type?.name ?? '';
 
-      // CRITICAL: Per-product error handling (review fix)
       let simResult: CalcResult | null = null;
       let realResult: CalcResult | null = null;
 
