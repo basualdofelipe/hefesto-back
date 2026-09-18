@@ -260,8 +260,10 @@ export class ScenariosService {
     // Load scenario with overrides
     const scenario = await this.findOne(id, userId);
 
-    // Load TN config
+    // Load TN config; the configured shipping default applies to sim and real alike
     const config = await this.tiendanubeConfigService.getAll();
+    const shippingCharged = config.shipping?.defaultShippingCharged ?? 0;
+    const shippingCost = config.shipping?.defaultShippingCost ?? 0;
 
     // Load all product costs
     const costMap = await this.costsService.calculateAll();
@@ -317,8 +319,8 @@ export class ScenariosService {
         try {
           simResult = this.calculatorService.calcForward({
             sellingPrice: effectivePrice,
-            shippingCharged: 0,
-            shippingCost: 0,
+            shippingCharged,
+            shippingCost,
             productCost: cost,
             gatewaySlug,
             paymentMethod,
@@ -336,8 +338,8 @@ export class ScenariosService {
         try {
           realResult = this.calculatorService.calcForward({
             sellingPrice: realPrice,
-            shippingCharged: 0,
-            shippingCost: 0,
+            shippingCharged,
+            shippingCost,
             productCost: cost,
             gatewaySlug,
             paymentMethod,

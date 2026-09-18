@@ -333,8 +333,8 @@ export class CalculatorService {
       if (currentPrice !== null && !isNaN(currentPrice) && currentPrice > 0) {
         calcResult = this.calcForward({
           sellingPrice: currentPrice,
-          shippingCharged: 0,
-          shippingCost: 0,
+          shippingCharged: config.shipping?.defaultShippingCharged ?? 0,
+          shippingCost: config.shipping?.defaultShippingCost ?? 0,
           productCost: cost,
           gatewaySlug: dto.gatewaySlug,
           paymentMethod: dto.paymentMethod,
