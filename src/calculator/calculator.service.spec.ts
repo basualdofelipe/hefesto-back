@@ -55,6 +55,7 @@ const mockConfig: TiendanubeConfigAll = {
       withdrawalDays: 14,
       ratePercent: 3.49,
       isActive: true,
+      planId: null,
     } as unknown as TiendanubeConfigAll['rates'][number],
   ],
   installments: [
