@@ -80,6 +80,7 @@ const mockConfig: TiendanubeConfigAll = {
       onlyPagoNube: false,
     } as unknown as TiendanubeConfigAll['plans'][number],
   ],
+  shipping: null,
 };
 
 const mockConfigIva105: TiendanubeConfigAll = {

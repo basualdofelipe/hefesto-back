@@ -6,10 +6,12 @@ import { TnGatewayRate } from './entities/tn-gateway-rate.entity';
 import { TnInstallmentRate } from './entities/tn-installment-rate.entity';
 import { TnTaxConfig } from './entities/tn-tax-config.entity';
 import { TnPlan } from './entities/tn-plan.entity';
+import { TnShippingConfig } from './entities/tn-shipping-config.entity';
 import { UpdateGatewayRateDto } from './dto/update-gateway-rate.dto';
 import { UpdateInstallmentRateDto } from './dto/update-installment-rate.dto';
 import { UpdateTaxConfigDto } from './dto/update-tax-config.dto';
 import { UpdatePlanDto } from './dto/update-plan.dto';
+import { UpdateShippingConfigDto } from './dto/update-shipping-config.dto';
 
 export interface ParsedGatewayRate extends Omit<TnGatewayRate, 'ratePercent'> {
   ratePercent: number;
@@ -38,12 +40,21 @@ export interface ParsedPlan extends Omit<
   cptOtherGateways: number;
 }
 
+export interface ParsedShippingConfig extends Omit<
+  TnShippingConfig,
+  'defaultShippingCost' | 'defaultShippingCharged'
+> {
+  defaultShippingCost: number;
+  defaultShippingCharged: number;
+}
+
 export interface TiendanubeConfigAll {
   gateways: TnPaymentGateway[];
   rates: ParsedGatewayRate[];
   installments: ParsedInstallmentRate[];
   taxConfig: ParsedTaxConfig | null;
   plans: ParsedPlan[];
+  shipping: ParsedShippingConfig | null;
 }
 
 @Injectable()
@@ -59,6 +70,8 @@ export class TiendanubeConfigService {
     private readonly taxConfigRepo: Repository<TnTaxConfig>,
     @InjectRepository(TnPlan)
     private readonly planRepo: Repository<TnPlan>,
+    @InjectRepository(TnShippingConfig)
+    private readonly shippingConfigRepo: Repository<TnShippingConfig>,
   ) {}
 
   // --- Decimal parsing helpers ---
@@ -93,11 +106,21 @@ export class TiendanubeConfigService {
     };
   }
 
+  private parseShippingConfig(config: TnShippingConfig): ParsedShippingConfig {
+    return {
+      ...config,
+      defaultShippingCost: parseFloat(config.defaultShippingCost as string),
+      defaultShippingCharged: parseFloat(
+        config.defaultShippingCharged as string,
+      ),
+    };
+  }
+
   // --- Public methods ---
 
   async getAll(): Promise<TiendanubeConfigAll> {
-    const [gateways, rates, installments, taxConfig, plans] = await Promise.all(
-      [
+    const [gateways, rates, installments, taxConfig, plans, shipping] =
+      await Promise.all([
         this.gatewayRepo.find({
           where: { isActive: true },
           order: { slug: 'ASC' },
@@ -106,10 +129,10 @@ export class TiendanubeConfigService {
         this.getInstallmentRates(),
         this.getTaxConfig(),
         this.getPlans(),
-      ],
-    );
+        this.getShippingConfig(),
+      ]);
 
-    return { gateways, rates, installments, taxConfig, plans };
+    return { gateways, rates, installments, taxConfig, plans, shipping };
   }
 
   async getGatewaysWithRates(): Promise<
@@ -198,6 +221,27 @@ export class TiendanubeConfigService {
 
     const saved = await this.taxConfigRepo.save(newConfig);
     return this.parseTaxConfig(saved);
+  }
+
+  async getShippingConfig(): Promise<ParsedShippingConfig | null> {
+    const config = await this.shippingConfigRepo.findOne({
+      where: { isActive: true },
+      order: { createdAt: 'DESC' },
+    });
+
+    return config ? this.parseShippingConfig(config) : null;
+  }
+
+  async updateShippingConfig(
+    dto: UpdateShippingConfigDto,
+  ): Promise<ParsedShippingConfig> {
+    const newConfig = this.shippingConfigRepo.create({
+      defaultShippingCost: String(dto.defaultShippingCost),
+      defaultShippingCharged: String(dto.defaultShippingCharged),
+    });
+
+    const saved = await this.shippingConfigRepo.save(newConfig);
+    return this.parseShippingConfig(saved);
   }
 
   async getPlans(): Promise<ParsedPlan[]> {
