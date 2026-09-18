@@ -1,4 +1,8 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import {
   TiendanubeConfigService,
   TiendanubeConfigAll,
@@ -138,6 +142,39 @@ export class CalculatorService {
       iibbRate: config.taxConfig.iibbRate / 100,
       cptRate, // stays as percentage -- divided by 100 in formula
     };
+  }
+
+  // ─── resolveProductCost: the single place a product cost comes from (R8, D-09) ──
+
+  /**
+   * Resolves the product cost used by forward/inverse. The stored cost wins over
+   * a manual one; a product that exists but has no BOM cannot be priced yet.
+   * Not used by calcBatch, which intentionally skips cost-less products.
+   */
+  async resolveProductCost(
+    productId?: string,
+    productCost?: number,
+  ): Promise<number> {
+    if (productId === undefined && productCost === undefined) {
+      throw new BadRequestException(
+        'Indicá un producto o un costo de producto',
+      );
+    }
+
+    if (productId === undefined) {
+      // The DTO already rejects negative values
+      return productCost as number;
+    }
+
+    // Throws NotFoundException('Producto no encontrado') for an unknown id
+    await this.productsService.findOne(productId);
+
+    const costData = await this.costsService.calculateForProduct(productId);
+    if (!costData) {
+      throw new BadRequestException(PRODUCT_COST_REQUIRED_MESSAGE);
+    }
+
+    return costData.cost;
   }
 
   // ─── calcForward: price -> profit ───────────────────────────────

@@ -13,7 +13,6 @@ import {
 } from '@nestjs/swagger';
 import { RequirePermission } from '../auth/decorators/require-permission.decorator';
 import { TiendanubeConfigService } from '../tiendanube-config/tiendanube-config.service';
-import { CostsService } from '../costs/costs.service';
 import { CalculatorService } from './calculator.service';
 import { CalcForwardDto } from './dto/calc-forward.dto';
 import { CalcInverseDto } from './dto/calc-inverse.dto';
@@ -32,7 +31,6 @@ export class CalculatorController {
   constructor(
     private readonly calculatorService: CalculatorService,
     private readonly tiendanubeConfigService: TiendanubeConfigService,
-    private readonly costsService: CostsService,
   ) {}
 
   @Post('forward')
@@ -47,22 +45,21 @@ export class CalculatorController {
     description: 'Desglose completo de la operacion',
   })
   @ApiResponse({
+    status: 400,
+    description:
+      'Falta productId/productCost, producto sin costo, o datos inválidos',
+  })
+  @ApiResponse({
     status: 404,
-    description: 'Gateway rate, installment rate, or tax config not found',
+    description:
+      'Product, gateway rate, installment rate, or tax config not found',
   })
   async forward(@Body() dto: CalcForwardDto): Promise<CalcResult> {
     const config = await this.tiendanubeConfigService.getAll();
-
-    // If productId provided, fetch cost from DB
-    let productCost = dto.productCost ?? 0;
-    if (dto.productId) {
-      const costData = await this.costsService.calculateForProduct(
-        dto.productId,
-      );
-      if (costData) {
-        productCost = costData.cost;
-      }
-    }
+    const productCost = await this.calculatorService.resolveProductCost(
+      dto.productId,
+      dto.productCost,
+    );
 
     // Return CalcResult directly -- ResponseInterceptor wraps to { data: CalcResult }
     return this.calculatorService.calcForward({
@@ -93,25 +90,20 @@ export class CalculatorController {
   })
   @ApiResponse({
     status: 400,
-    description: 'Invalid input (zero cost, negative profit, unreachable)',
+    description:
+      'Falta productId/productCost, producto sin costo, ganancia negativa o inalcanzable',
   })
   @ApiResponse({
     status: 404,
-    description: 'Gateway rate, installment rate, or tax config not found',
+    description:
+      'Product, gateway rate, installment rate, or tax config not found',
   })
   async inverse(@Body() dto: CalcInverseDto): Promise<CalcInverseResult> {
     const config = await this.tiendanubeConfigService.getAll();
-
-    // If productId provided, fetch cost from DB
-    let productCost = dto.productCost ?? 0;
-    if (dto.productId) {
-      const costData = await this.costsService.calculateForProduct(
-        dto.productId,
-      );
-      if (costData) {
-        productCost = costData.cost;
-      }
-    }
+    const productCost = await this.calculatorService.resolveProductCost(
+      dto.productId,
+      dto.productCost,
+    );
 
     const result = this.calculatorService.calcInverse({
       targetProfit: dto.targetProfit,
