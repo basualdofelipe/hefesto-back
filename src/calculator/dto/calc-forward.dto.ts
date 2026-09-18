@@ -78,7 +78,8 @@ export class CalcForwardDto {
   installments: number = 1;
 
   @ApiPropertyOptional({
-    description: 'Plan slug override (defaults to admin current plan)',
+    description:
+      "Tiendanube plan slug. Omitted = 'esencial' (compile-time default, TN_PLAN_ESENCIAL); there is no per-admin current plan.",
     example: 'esencial',
   })
   @IsOptional()
