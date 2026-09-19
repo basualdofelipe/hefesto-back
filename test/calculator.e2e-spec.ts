@@ -54,6 +54,8 @@ import {
 // Unique prefix for all test-created users — makes cleanup safe and targeted.
 const TEST_PREFIX = 'e2e-calc-';
 const TN_PLAN_ESCALA = 'escala';
+const TN_GATEWAY_MERCADO_PAGO = 'mercado_pago';
+const TN_PAYMENT_TODOS_LOS_MEDIOS = 'todos_los_medios';
 
 // A v4 UUID that no seeded or test row can carry.
 const UNKNOWN_PRODUCT_ID = '00000000-0000-4000-8000-000000000000';
@@ -73,6 +75,23 @@ const CASE_A = {
 
 // Same inputs for the inverse endpoint; each test states its own targetProfit
 const { sellingPrice: _caseASellingPrice, ...CASE_A_INVERSE } = CASE_A;
+
+// The tuple behind UAT Test 1 (G-14-1): the front's default selection is
+// activeGateways[0] by slug ASC → mercado_pago, its lowest withdrawal days 0
+// (6.29 %), plus CPT Esencial 2 % for non-Pago-Nube gateways. Forward at the
+// old fixed ceiling 100000 gives 66601.10 < 70000, so before the fix this
+// request returned 400 'Ganancia inalcanzable con estas tasas'.
+const UAT_G141_INVERSE = {
+  productCost: 4550,
+  shippingCharged: 8000,
+  shippingCost: 6500,
+  targetProfit: 70000,
+  gatewaySlug: TN_GATEWAY_MERCADO_PAGO,
+  paymentMethod: TN_PAYMENT_TODOS_LOS_MEDIOS,
+  withdrawalDays: 0,
+  installments: 1,
+  planSlug: TN_PLAN_ESENCIAL,
+};
 
 interface ErrorBody {
   statusCode: number;
@@ -289,6 +308,16 @@ describe('Calculator HTTP contract (real Postgres)', () => {
       const body = res.body as DataBody<CalcInverseResultBody>;
 
       expect(Math.abs(body.data.realProfit)).toBeLessThanOrEqual(0.01);
+    });
+  });
+
+  describe('G-14-1 regression — target above the old fixed ceiling', () => {
+    it('mercado_pago default tuple (4550 / 8000 / 6500 / 70000) → 200 with realProfit 70000 and a price above the old ceiling', async () => {
+      const res = await inverse().send(UAT_G141_INVERSE).expect(200);
+      const body = res.body as DataBody<CalcInverseResultBody>;
+
+      expect(body.data.realProfit).toBe(70000);
+      expect(body.data.requiredSellingPrice).toBeCloseTo(104797, 1);
     });
   });
 
