@@ -636,6 +636,35 @@ describe('CalculatorService', () => {
         message: 'La ganancia deseada excede el rango de cálculo',
       });
     });
+
+    // CR-01 regressions: the initial bracket must be capped like the expansion.
+    // Before the clamp, 1e14 hung the process (cent snap above 2^53 never
+    // advances) and 1e308 returned price 0 with a NaN breakdown.
+    it('returns the range error, not a hang, when a huge manual productCost pushes the bracket past the cap', () => {
+      const result = service.calcInverse({
+        ...INVERSE_A,
+        productCost: 1e14,
+        targetProfit: 0,
+      });
+
+      expect(result).toEqual({
+        error: true,
+        message: 'La ganancia deseada excede el rango de cálculo',
+      });
+    }, 5000);
+
+    it('returns the range error, never price 0, when productCost * 20 overflows to Infinity', () => {
+      const result = service.calcInverse({
+        ...INVERSE_A,
+        productCost: 1e308,
+        targetProfit: 0,
+      });
+
+      expect(result).toEqual({
+        error: true,
+        message: 'La ganancia deseada excede el rango de cálculo',
+      });
+    });
   });
 
   // ─── resolveProductCost: 400 / 404 / 400 "Definí…" / productId wins (R8, D-09) ──
