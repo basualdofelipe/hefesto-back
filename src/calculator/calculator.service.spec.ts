@@ -90,6 +90,17 @@ const MP_TODOS_14_ALL_PLANS = {
   isActive: true,
   planId: null,
 } as unknown as MockRate;
+// An 80 % base fee under IVA 21 / IIBB 3.5 makes profit decrease with price
+// (slope -0.0086): the only way a target is truly unreachable
+const PN_TARJETA_7_FEE_80 = {
+  id: 'rate-pn-7-fee-80',
+  gateway: pagoNubeGateway,
+  paymentMethod: TN_PAYMENT_TARJETA,
+  withdrawalDays: 7,
+  ratePercent: 80,
+  isActive: true,
+  planId: null,
+} as unknown as MockRate;
 
 const mockConfig: TiendanubeConfigAll = {
   gateways: [
@@ -145,6 +156,11 @@ const mockConfig: TiendanubeConfigAll = {
     } as unknown as TiendanubeConfigAll['plans'][number],
   ],
   shipping: null,
+};
+
+const mockConfigUnreachableFee: TiendanubeConfigAll = {
+  ...mockConfig,
+  rates: [...mockConfig.rates, PN_TARJETA_7_FEE_80],
 };
 
 const mockConfigIva105: TiendanubeConfigAll = {
@@ -519,12 +535,105 @@ describe('CalculatorService', () => {
       });
     });
 
-    it('returns the unreachable error when targetProfit exceeds the upper bound', () => {
-      const result = service.calcInverse({ ...INVERSE_A, targetProfit: 1e12 });
+    // UAT tuple (G-14-1): productCost 4550, shipping 8000 charged / 6500 cost.
+    // Under mockConfig profit is affine in the price with slope 0.75654628.
+    const INVERSE_UAT = {
+      ...BASE,
+      productCost: 4550,
+      shippingCharged: 8000,
+      shippingCost: 6500,
+    };
+    const INVERSE_UAT_FREE_CARRIER = { ...INVERSE_UAT, shippingCost: 0 };
+
+    it('returns a price for target 80000, which lies above the old fixed ceiling (forward(100000).realProfit is 71785.10): 110858.42 with realProfit exactly 80000 (G-14-1)', () => {
+      const inverse = service.calcInverse({
+        ...INVERSE_UAT,
+        targetProfit: 80000,
+      });
+
+      expect((inverse as CalcError).error).toBeUndefined();
+      const result = inverse as CalcInverseResult;
+      expect(result.requiredSellingPrice).toBeCloseTo(110858.42, 1);
+      expect(result.realProfit).toBe(80000);
+      // The embedded breakdown is the forward evaluated at the returned price
+      expect(result.customerTotal).toBeCloseTo(
+        result.requiredSellingPrice + 8000,
+        2,
+      );
+
+      const forward = service.calcForward({
+        ...BASE,
+        productCost: 4550,
+        shippingCharged: 8000,
+        shippingCost: 6500,
+        sellingPrice: result.requiredSellingPrice,
+      });
+      expect(forward.realProfit).toBe(80000);
+    });
+
+    it('returns a price below the product cost 4550 when shipping charged subsidises it: target 3000 with 8000 charged / 0 cost gives 1979.56 with realProfit exactly 3000', () => {
+      const inverse = service.calcInverse({
+        ...INVERSE_UAT_FREE_CARRIER,
+        targetProfit: 3000,
+      });
+
+      expect((inverse as CalcError).error).toBeUndefined();
+      const result = inverse as CalcInverseResult;
+      expect(result.requiredSellingPrice).toBeCloseTo(1979.56, 1);
+      expect(result.realProfit).toBe(3000);
+
+      const forward = service.calcForward({
+        ...BASE,
+        productCost: 4550,
+        shippingCharged: 8000,
+        shippingCost: 0,
+        sellingPrice: result.requiredSellingPrice,
+      });
+      expect(forward.realProfit).toBe(3000);
+    });
+
+    it('returns the price-0 error when the target is already met at price 0 (profit at price 0 is 1502.37): target 1000 and exactly 1502.37 alike', () => {
+      const belowProfitAtZero = service.calcInverse({
+        ...INVERSE_UAT_FREE_CARRIER,
+        targetProfit: 1000,
+      });
+      expect(belowProfitAtZero).toEqual({
+        error: true,
+        message: 'La ganancia deseada ya se supera con precio 0',
+      });
+
+      const exactlyProfitAtZero = service.calcInverse({
+        ...INVERSE_UAT_FREE_CARRIER,
+        targetProfit: 1502.37,
+      });
+      expect(exactlyProfitAtZero).toEqual({
+        error: true,
+        message: 'La ganancia deseada ya se supera con precio 0',
+      });
+    });
+
+    it('returns the unreachable error only when the rates make profit decrease with price: an 80 % base gateway rate under IVA 21 / IIBB 3.5 (slope -0.0086) makes even break-even unreachable', () => {
+      for (const targetProfit of [0, 50000]) {
+        const result = service.calcInverse({
+          ...INVERSE_A,
+          withdrawalDays: 7,
+          config: mockConfigUnreachableFee,
+          targetProfit,
+        });
+
+        expect(result).toEqual({
+          error: true,
+          message: 'Ganancia inalcanzable con estas tasas',
+        });
+      }
+    });
+
+    it('returns the range error, not the rates one, when even the search cap cannot reach the target (1e18)', () => {
+      const result = service.calcInverse({ ...INVERSE_A, targetProfit: 1e18 });
 
       expect(result).toEqual({
         error: true,
-        message: 'Ganancia inalcanzable con estas tasas',
+        message: 'La ganancia deseada excede el rango de cálculo',
       });
     });
   });
