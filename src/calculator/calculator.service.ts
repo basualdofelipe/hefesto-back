@@ -31,7 +31,8 @@ export const PRODUCT_COST_REQUIRED_MESSAGE =
 const INVERSE_SLOPE_SPAN = 1_000_000;
 // First upper bound of the search before expansion
 const INVERSE_INITIAL_CEILING = 100_000;
-// Expansion cap: keeps the cent-level bisection inside double precision
+// Cap on the initial bound and its expansion: keeps the cent-level bisection
+// inside double precision (the cent snap needs price * 100 < 2^53)
 const INVERSE_MAX_PRICE = 1e12;
 
 interface ResolvedRates {
@@ -305,7 +306,9 @@ export class CalculatorService {
     // Profit is affine in the price, so:
     // 1. the sign of the slope alone decides whether any target is reachable;
     // 2. a target already met at price 0 has no positive price to return;
-    // 3. doubling the upper bound always ends (capped so bisection stays exact);
+    // 3. the upper bound starts at and expands to at most INVERSE_MAX_PRICE, so
+    //    the search always ends and bisection stays inside double precision
+    //    (a target unreachable under the cap is a range error, never a hang);
     // 4. bisection on [0, high] narrows the price to a cent, and the snap picks
     //    the cent whose profit matches the target, so the answer depends only
     //    on the target and the returned breakdown is the one for that price.
@@ -327,7 +330,10 @@ export class CalculatorService {
     }
 
     let low = 0;
-    let high = Math.max(productCost * 20, INVERSE_INITIAL_CEILING);
+    let high = Math.min(
+      Math.max(productCost * 20, INVERSE_INITIAL_CEILING),
+      INVERSE_MAX_PRICE,
+    );
 
     while (profitAt(high) < targetProfit) {
       if (high >= INVERSE_MAX_PRICE) {
