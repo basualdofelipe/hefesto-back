@@ -628,7 +628,7 @@ describe('CalculatorService', () => {
       }
     });
 
-    it('returns the range error, not the rates one, when even the search cap cannot reach the target (1e18)', () => {
+    it('returns the range error, not the rates one, when even the search cap cannot reach the target', () => {
       const result = service.calcInverse({ ...INVERSE_A, targetProfit: 1e18 });
 
       expect(result).toEqual({

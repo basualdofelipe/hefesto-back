@@ -26,6 +26,14 @@ import {
 export const PRODUCT_COST_REQUIRED_MESSAGE =
   'Definí el costo del producto primero';
 
+// Price span of the two-point slope: calcForward rounds profit to cents, so the
+// slope is quantized to 1e-8 — decisive for any configurable rate
+const INVERSE_SLOPE_SPAN = 1_000_000;
+// First upper bound of the search before expansion
+const INVERSE_INITIAL_CEILING = 100_000;
+// Expansion cap: keeps the cent-level bisection inside double precision
+const INVERSE_MAX_PRICE = 1e12;
+
 interface ResolvedRates {
   gatewayRate: number;
   installmentRate: number;
@@ -274,7 +282,7 @@ export class CalculatorService {
     };
   }
 
-  // ─── calcInverse: profit -> price (binary search) ───────────────
+  // ─── calcInverse: profit -> price (expand-and-bisect) ───────────
 
   calcInverse(params: CalcInverseParams): CalcInverseResult | CalcError {
     const { targetProfit, productCost } = params;
@@ -290,36 +298,52 @@ export class CalculatorService {
       };
     }
 
-    // Bracket assumes forward(productCost) is below the target; when shipping charged
-    // far exceeds shipping cost that can be false and the search converges to `low`.
-    let low = productCost;
-    let high = Math.max(productCost * 20, 100000);
+    // The only way the inverse observes profit: no rate arithmetic in here
+    const profitAt = (sellingPrice: number): number =>
+      this.calcForward({ ...params, sellingPrice }).realProfit;
 
-    // Check if target is reachable at upper bound
-    const upperResult = this.calcForward({
-      ...params,
-      sellingPrice: high,
-    });
-    if (upperResult.realProfit < targetProfit) {
+    // Profit is affine in the price, so:
+    // 1. the sign of the slope alone decides whether any target is reachable;
+    // 2. a target already met at price 0 has no positive price to return;
+    // 3. doubling the upper bound always ends (capped so bisection stays exact);
+    // 4. bisection on [0, high] narrows the price to a cent, and the snap picks
+    //    the cent whose profit matches the target, so the answer depends only
+    //    on the target and the returned breakdown is the one for that price.
+    const profitAtZero = profitAt(0);
+    const slope =
+      (profitAt(INVERSE_SLOPE_SPAN) - profitAtZero) / INVERSE_SLOPE_SPAN;
+    if (slope <= 0) {
       return {
         error: true,
         message: 'Ganancia inalcanzable con estas tasas',
       };
     }
 
-    // Binary search with epsilon convergence
-    let mid = 0;
-    let result: CalcResult = upperResult;
+    if (profitAtZero >= targetProfit) {
+      return {
+        error: true,
+        message: 'La ganancia deseada ya se supera con precio 0',
+      };
+    }
+
+    let low = 0;
+    let high = Math.max(productCost * 20, INVERSE_INITIAL_CEILING);
+
+    while (profitAt(high) < targetProfit) {
+      if (high >= INVERSE_MAX_PRICE) {
+        return {
+          error: true,
+          message: 'La ganancia deseada excede el rango de cálculo',
+        };
+      }
+      high = Math.min(high * 2, INVERSE_MAX_PRICE);
+    }
+
     let iterations = 0;
-
     while (high - low > 0.01 && iterations < 100) {
-      mid = (low + high) / 2;
-      result = this.calcForward({
-        ...params,
-        sellingPrice: mid,
-      });
+      const mid = (low + high) / 2;
 
-      if (result.realProfit < targetProfit) {
+      if (profitAt(mid) < targetProfit) {
         low = mid;
       } else {
         high = mid;
@@ -327,9 +351,30 @@ export class CalculatorService {
       iterations++;
     }
 
+    const firstCent = Math.floor(low * 100);
+    const lastCent = Math.min(Math.ceil(high * 100), firstCent + 2);
+    let bestPrice = firstCent / 100;
+    let bestResult: CalcResult = this.calcForward({
+      ...params,
+      sellingPrice: bestPrice,
+    });
+
+    for (let cents = firstCent + 1; cents <= lastCent; cents++) {
+      const price = cents / 100;
+      const candidate = this.calcForward({ ...params, sellingPrice: price });
+
+      if (
+        Math.abs(candidate.realProfit - targetProfit) <
+        Math.abs(bestResult.realProfit - targetProfit)
+      ) {
+        bestPrice = price;
+        bestResult = candidate;
+      }
+    }
+
     return {
-      ...result,
-      requiredSellingPrice: Math.round(mid * 100) / 100,
+      ...bestResult,
+      requiredSellingPrice: bestPrice,
     };
   }
 
