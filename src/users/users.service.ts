@@ -96,13 +96,13 @@ export class UsersService {
 
   // ─── Helper: count OTHER active admins inside a transaction ───
   //
-  // UAT Tests 2/8 gap closure: PostgreSQL prohibits FOR UPDATE with aggregate
-  // functions (COUNT), so combining .setLock('pessimistic_write') with
-  // .getCount() is illegal and causes a 500 ROLLBACK. The row-lock on the
-  // aggregate is also redundant: update() and remove() both start a
-  // SERIALIZABLE transaction, which already serializes concurrent
-  // demote/deactivate/delete requests on the "penultimate" admin — no
-  // pessimistic_write lock on the COUNT query is needed to guarantee safety.
+  // PostgreSQL prohibits FOR UPDATE with aggregate functions (COUNT), so
+  // combining .setLock('pessimistic_write') with .getCount() is illegal and
+  // causes a 500 ROLLBACK. The row-lock on the aggregate is also redundant:
+  // update() and remove() both start a SERIALIZABLE transaction, which
+  // already serializes concurrent demote/deactivate/delete requests on the
+  // "penultimate" admin — no pessimistic_write lock on the COUNT query is
+  // needed to guarantee safety.
   // Note: SERIALIZABLE enforces this by raising serialization_failure (40001)
   // on the losing txn; callers must map/retry that — see error handling in
   // update()/remove(), which maps 40001 to a 409 ConflictException.

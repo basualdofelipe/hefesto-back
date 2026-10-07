@@ -6,39 +6,43 @@ REST API backend for **Hefesto** — a cost management and pricing tool for a le
 
 ## Stack
 
-| Layer | Technology |
-|---|---|
-| Framework | NestJS 11 |
-| Language | TypeScript 5 (strict, no `any`, explicit return types) |
-| ORM | TypeORM 0.3 with hand-written reversible migrations |
-| Database | PostgreSQL 16 |
-| Auth | Google OAuth (ID token exchange) + JWT (Bearer) |
+| Layer      | Technology                                                          |
+| ---------- | ------------------------------------------------------------------- |
+| Framework  | NestJS 11                                                           |
+| Language   | TypeScript 5 (strict, no `any`, explicit return types)              |
+| ORM        | TypeORM 0.3 with hand-written reversible migrations                 |
+| Database   | PostgreSQL 16                                                       |
+| Auth       | Google OAuth (ID token exchange) + JWT (Bearer)                     |
 | Validation | class-validator + class-transformer, Joi env validation (fail-fast) |
-| API docs | Swagger / OpenAPI (`@nestjs/swagger`) — development only |
-| Security | Helmet, CORS, `@nestjs/throttler` (100 req / 60 s global) |
-| Process | Procfile (`node dist/main.js`) for Railway |
-| Local DB | Docker Compose (PostgreSQL 16 Alpine) |
+| API docs   | Swagger / OpenAPI (`@nestjs/swagger`) — development only            |
+| Security   | Helmet, CORS, `@nestjs/throttler` (100 req / 60 s global)           |
+| Process    | Procfile (`node dist/main.js`) for Railway                          |
+| Local DB   | Docker Compose (PostgreSQL 16 Alpine)                               |
 
 ---
 
 ## Features
 
-| Module | Path prefix | Description |
-|---|---|---|
-| Auth | `POST /api/auth/google` | Exchange Google `id_token` for a signed JWT |
-| Auth | `POST /api/auth/demo-login` | Env-gated demo login (hard-pinned account) |
-| Auth | `GET /api/auth/me` | Authenticated user profile |
-| Users | `/api/users` | Whitelist-based user management (admin only) |
-| Roles | `/api/roles` | Custom roles with per-permission boolean flags (admin only) |
-| Catalogs | `/api/catalogs/:dimension` | Reference data: product types, names, finishes, colors, sizes, supply types, expense categories |
-| Suppliers | `/api/suppliers` | Supplier CRUD with active/inactive toggle |
-| Supplies | `/api/supplies` | Supply CRUD with price history log |
-| Products | `/api/products` | Product CRUD, BOM management, price history, batch operations |
-| Costs | (service) | BOM-based dynamic cost engine — calculates cost from current supply prices |
-| Expenses | `/api/expenses` | Business expense log with category filtering |
-| Tiendanube Config | `/api/tiendanube-config` | Payment gateways, installment rates, tax config (IVA/IIBB), plans |
-| Calculadora | `/api/calculadora` | Forward pricing (margin from sell price), inverse pricing (sell price from target margin), batch margin across all products |
-| Scenarios | `/api/scenarios` | Named what-if pricing scenarios with per-product price overrides and margin calculation |
+| Module            | Path prefix                 | Description                                                                                                                 |
+| ----------------- | --------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| Auth              | `POST /api/auth/google`     | Exchange Google `id_token` for a signed JWT                                                                                 |
+| Auth              | `POST /api/auth/demo-login` | Env-gated demo login (hard-pinned account)                                                                                  |
+| Auth              | `GET /api/auth/me`          | Authenticated user profile                                                                                                  |
+| Users             | `/api/users`                | Whitelist-based user management (admin only)                                                                                |
+| Roles             | `/api/roles`                | Custom roles with per-permission boolean flags (admin only)                                                                 |
+| Catalogs          | `/api/catalogs/:dimension`  | Reference data: product types, names, finishes, colors, sizes, supply types, expense categories                             |
+| Suppliers         | `/api/suppliers`            | Supplier CRUD with active/inactive toggle                                                                                   |
+| Supplies          | `/api/supplies`             | Supply CRUD with price history log                                                                                          |
+| Products          | `/api/products`             | Product CRUD, BOM management, price history, batch operations                                                               |
+| Costs             | (service)                   | BOM-based dynamic cost engine — calculates cost from current supply prices                                                  |
+| Expenses          | `/api/expenses`             | Business expense log with category filtering                                                                                |
+| Tiendanube Config | `/api/tiendanube-config`    | Payment gateways, installment rates, tax config (IVA/IIBB), plans                                                           |
+| Calculator        | `/api/calculator`           | Forward pricing (margin from sell price), inverse pricing (sell price from target margin), batch margin across all products |
+| Scenarios         | `/api/scenarios`            | Named what-if pricing scenarios with per-product price overrides and margin calculation                                     |
+
+### Supuesto fiscal
+
+The pricing formula behind `/api/calculator` (and the scenarios that reuse it) assumes the seller is **Responsable Inscripto**: IVA débito is computed on the customer total, and IVA crédito is recovered on the product cost, the gateway fee and the shipping cost. Monotributo is not modelled.
 
 ---
 
@@ -52,19 +56,19 @@ The JWT payload carries a `permissions` object derived from the user's assigned 
 
 Roles are fully custom: each role stores 11 boolean permission flags. The flags are embedded directly in the JWT, so permission checks are stateless (no DB query per request).
 
-| Permission | Controls access to |
-|---|---|
-| `can_view_products` | Read products, BOM, price history, catalogs |
-| `can_edit_products` | Create/update products, BOM, prices |
-| `can_view_supplies` | Read supplies, suppliers |
-| `can_edit_supplies` | Create/update supplies, suppliers |
-| `can_view_expenses` | Read expenses |
-| `can_edit_expenses` | Create/update/delete expenses |
-| `can_use_calculator` | Calculadora endpoints |
-| `can_manage_scenarios` | Scenarios CRUD and calculation |
-| `can_view_dashboard` | Dashboard data access |
-| `can_manage_config` | Update Tiendanube config (rates, taxes, plans) |
-| `can_manage_users` | User and role management (admin-tier) |
+| Permission             | Controls access to                             |
+| ---------------------- | ---------------------------------------------- |
+| `can_view_products`    | Read products, BOM, price history, catalogs    |
+| `can_edit_products`    | Create/update products, BOM, prices            |
+| `can_view_supplies`    | Read supplies, suppliers                       |
+| `can_edit_supplies`    | Create/update supplies, suppliers              |
+| `can_view_expenses`    | Read expenses                                  |
+| `can_edit_expenses`    | Create/update/delete expenses                  |
+| `can_use_calculator`   | Calculator endpoints                           |
+| `can_manage_scenarios` | Scenarios CRUD and calculation                 |
+| `can_view_dashboard`   | Dashboard data access                          |
+| `can_manage_config`    | Update Tiendanube config (rates, taxes, plans) |
+| `can_manage_users`     | User and role management (admin-tier)          |
 
 ---
 
@@ -143,22 +147,22 @@ The API is available at `http://localhost:4000/api`.
 
 ## Available scripts
 
-| Command | Description |
-|---|---|
-| `npm run start:dev` | Start with hot-reload (development) |
-| `npm run start` | Start without watch |
-| `npm run start:prod` | Start compiled output (`dist/main.js`) |
-| `npm run build` | Compile TypeScript to `dist/` |
-| `npm run migration:run` | Run all pending TypeORM migrations |
-| `npm run migration:revert` | Revert the last applied migration |
+| Command                      | Description                                  |
+| ---------------------------- | -------------------------------------------- |
+| `npm run start:dev`          | Start with hot-reload (development)          |
+| `npm run start`              | Start without watch                          |
+| `npm run start:prod`         | Start compiled output (`dist/main.js`)       |
+| `npm run build`              | Compile TypeScript to `dist/`                |
+| `npm run migration:run`      | Run all pending TypeORM migrations           |
+| `npm run migration:revert`   | Revert the last applied migration            |
 | `npm run migration:generate` | Generate a new migration from entity changes |
-| `npm run test` | Run unit tests (Jest) |
-| `npm run test:watch` | Run tests in watch mode |
-| `npm run test:cov` | Run tests with coverage report |
-| `npm run test:e2e` | Run end-to-end tests |
-| `npm run lint` | Run ESLint |
-| `npm run lint:fix` | Run ESLint with auto-fix |
-| `npm run prettier:fix` | Format all source files with Prettier |
+| `npm run test`               | Run unit tests (Jest)                        |
+| `npm run test:watch`         | Run tests in watch mode                      |
+| `npm run test:cov`           | Run tests with coverage report               |
+| `npm run test:e2e`           | Run end-to-end tests                         |
+| `npm run lint`               | Run ESLint                                   |
+| `npm run lint:fix`           | Run ESLint with auto-fix                     |
+| `npm run prettier:fix`       | Format all source files with Prettier        |
 
 ---
 
@@ -172,7 +176,7 @@ src/
 │   ├── guards/             # JwtAuthGuard, PermissionsGuard
 │   └── strategies/         # passport-jwt strategy
 ├── catalogs/               # Reference data dimensions (types, colors, sizes, etc.)
-├── calculadora/            # Forward / inverse / batch pricing calculator
+├── calculator/             # Forward / inverse / batch pricing calculator
 ├── common/
 │   ├── entities/           # BaseEntity (UUID PK, createdAt, updatedAt)
 │   ├── filters/            # HttpExceptionFilter
@@ -247,19 +251,19 @@ To deploy under a different brand, set these environment variables before buildi
 
 **Backend (`.env`)**
 
-| Variable | Default | Description |
-|---|---|---|
-| `APP_NAME` | `Hefesto` | App name (Swagger title + description) |
-| `DEMO_EMAIL` | `demo@hefesto.com` | Email of the seeded demo account |
-| `ADMIN_EMAIL` | `admin@hefesto.com` | Email of the seeded admin account |
-| `ADMIN_NAME` | `Admin` | Display name of the seeded admin |
+| Variable      | Default             | Description                            |
+| ------------- | ------------------- | -------------------------------------- |
+| `APP_NAME`    | `Hefesto`           | App name (Swagger title + description) |
+| `DEMO_EMAIL`  | `demo@hefesto.com`  | Email of the seeded demo account       |
+| `ADMIN_EMAIL` | `admin@hefesto.com` | Email of the seeded admin account      |
+| `ADMIN_NAME`  | `Admin`             | Display name of the seeded admin       |
 
 **Frontend (`.env.local`)**
 
-| Variable | Default | Description |
-|---|---|---|
-| `NEXT_PUBLIC_APP_NAME` | `Hefesto` | App name (page title, heading, alt text) |
-| `NEXT_PUBLIC_DEMO_EMAIL` | `demo@hefesto.com` | Demo email shown on the login page |
+| Variable                    | Default             | Description                                   |
+| --------------------------- | ------------------- | --------------------------------------------- |
+| `NEXT_PUBLIC_APP_NAME`      | `Hefesto`           | App name (page title, heading, alt text)      |
+| `NEXT_PUBLIC_DEMO_EMAIL`    | `demo@hefesto.com`  | Demo email shown on the login page            |
 | `NEXT_PUBLIC_CONTACT_EMAIL` | `admin@hefesto.com` | Contact email shown on the access-denied page |
 
 **Important notes:**
@@ -300,6 +304,5 @@ Deliberate engineering decisions and their accepted trade-offs — documented ra
 
 - **Single source of truth for permissions.** The 11-permission set is currently expressed in the `roles` table columns, the `permission.ts` type/const, and the frontend mirror. A shared definition (codegen or a small shared package) would remove the cross-boundary drift risk.
 - **Response DTOs on all controllers.** A few endpoints (`auth/me`, users) return TypeORM entities directly. No secret columns exist today, but explicit response DTOs would harden the contract against future leakage.
-- **Status-code contract fix.** Calculadora `POST` endpoints return `201` while their Swagger docs declare `200` — add `@HttpCode(200)`.
 - **Integration tests against a real database.** The concurrency guard (SERIALIZABLE last-admin) and the raw `DISTINCT ON` queries are unit-tested with mocks; Testcontainers-backed integration tests would verify them against real Postgres.
 - **Platform hardening.** Rate-limiting / idempotency keys on mutating batch endpoints, structured logging with correlation IDs, and an ADR documenting the boolean-permission-columns vs. join-table decision.

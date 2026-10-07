@@ -2,13 +2,13 @@ import { Module } from '@nestjs/common';
 import { TiendanubeConfigModule } from '../tiendanube-config/tiendanube-config.module';
 import { CostsModule } from '../costs/costs.module';
 import { ProductsModule } from '../products/products.module';
-import { CalculadoraController } from './calculadora.controller';
-import { CalculadoraService } from './calculadora.service';
+import { CalculatorController } from './calculator.controller';
+import { CalculatorService } from './calculator.service';
 
 @Module({
   imports: [TiendanubeConfigModule, CostsModule, ProductsModule],
-  controllers: [CalculadoraController],
-  providers: [CalculadoraService],
-  exports: [CalculadoraService],
+  controllers: [CalculatorController],
+  providers: [CalculatorService],
+  exports: [CalculatorService],
 })
-export class CalculadoraModule {}
+export class CalculatorModule {}

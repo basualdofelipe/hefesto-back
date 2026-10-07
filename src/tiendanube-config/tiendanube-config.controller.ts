@@ -18,6 +18,7 @@ import {
   ParsedGatewayRate,
   ParsedInstallmentRate,
   ParsedPlan,
+  ParsedShippingConfig,
   ParsedTaxConfig,
   TiendanubeConfigAll,
   TiendanubeConfigService,
@@ -27,6 +28,7 @@ import { UpdateGatewayRateDto } from './dto/update-gateway-rate.dto';
 import { UpdateInstallmentRateDto } from './dto/update-installment-rate.dto';
 import { UpdateTaxConfigDto } from './dto/update-tax-config.dto';
 import { UpdatePlanDto } from './dto/update-plan.dto';
+import { UpdateShippingConfigDto } from './dto/update-shipping-config.dto';
 
 @ApiTags('Tiendanube Config')
 @ApiBearerAuth()
@@ -145,6 +147,39 @@ export class TiendanubeConfigController {
     @Body() dto: UpdateTaxConfigDto,
   ): Promise<ParsedTaxConfig> {
     return this.configService.updateTaxConfig(dto);
+  }
+
+  @Get('shipping')
+  @ApiOperation({
+    summary: 'Obtener envío por defecto vigente',
+    description: 'Requires: authenticated user (no specific permission)',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Envío por defecto (costo con IVA y cobrado al cliente)',
+  })
+  async getShipping(): Promise<ParsedShippingConfig | null> {
+    return this.configService.getShippingConfig();
+  }
+
+  @Put('shipping')
+  @RequirePermission('can_manage_config')
+  @ApiOperation({
+    summary: 'Actualizar envío por defecto (crea nuevo registro histórico)',
+    description: 'Requires: can_manage_config',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Envío por defecto actualizado',
+  })
+  @ApiResponse({
+    status: 403,
+    description: 'Forbidden — requiere permiso can_manage_config',
+  })
+  async updateShippingConfig(
+    @Body() dto: UpdateShippingConfigDto,
+  ): Promise<ParsedShippingConfig> {
+    return this.configService.updateShippingConfig(dto);
   }
 
   @Get('plans')
