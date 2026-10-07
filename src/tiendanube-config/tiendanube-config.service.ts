@@ -6,13 +6,24 @@ import { TnGatewayRate } from './entities/tn-gateway-rate.entity';
 import { TnInstallmentRate } from './entities/tn-installment-rate.entity';
 import { TnTaxConfig } from './entities/tn-tax-config.entity';
 import { TnPlan } from './entities/tn-plan.entity';
+import { TnShippingConfig } from './entities/tn-shipping-config.entity';
 import { UpdateGatewayRateDto } from './dto/update-gateway-rate.dto';
 import { UpdateInstallmentRateDto } from './dto/update-installment-rate.dto';
 import { UpdateTaxConfigDto } from './dto/update-tax-config.dto';
 import { UpdatePlanDto } from './dto/update-plan.dto';
+import { UpdateShippingConfigDto } from './dto/update-shipping-config.dto';
+import { TN_GATEWAYS_WITH_PLAN_RATES } from '../constants/tiendanube';
 
-export interface ParsedGatewayRate extends Omit<TnGatewayRate, 'ratePercent'> {
+/**
+ * The `plan` relation is omitted: rows come from raw SQL that never loads it.
+ * `planId` is the aliased column (null = the rate applies to every plan).
+ */
+export interface ParsedGatewayRate extends Omit<
+  TnGatewayRate,
+  'ratePercent' | 'plan'
+> {
   ratePercent: number;
+  planId: string | null;
 }
 
 export interface ParsedInstallmentRate extends Omit<
@@ -38,12 +49,21 @@ export interface ParsedPlan extends Omit<
   cptOtherGateways: number;
 }
 
+export interface ParsedShippingConfig extends Omit<
+  TnShippingConfig,
+  'defaultShippingCost' | 'defaultShippingCharged'
+> {
+  defaultShippingCost: number;
+  defaultShippingCharged: number;
+}
+
 export interface TiendanubeConfigAll {
   gateways: TnPaymentGateway[];
   rates: ParsedGatewayRate[];
   installments: ParsedInstallmentRate[];
   taxConfig: ParsedTaxConfig | null;
   plans: ParsedPlan[];
+  shipping: ParsedShippingConfig | null;
 }
 
 @Injectable()
@@ -59,14 +79,21 @@ export class TiendanubeConfigService {
     private readonly taxConfigRepo: Repository<TnTaxConfig>,
     @InjectRepository(TnPlan)
     private readonly planRepo: Repository<TnPlan>,
+    @InjectRepository(TnShippingConfig)
+    private readonly shippingConfigRepo: Repository<TnShippingConfig>,
   ) {}
 
   // --- Decimal parsing helpers ---
 
   private parseGatewayRate(rate: TnGatewayRate): ParsedGatewayRate {
+    // Raw-SQL rows carry the aliased `planId`; entity rows from save() carry `plan`.
+    const { plan, ...rest } = rate as TnGatewayRate & {
+      planId?: string | null;
+    };
     return {
-      ...rate,
+      ...rest,
       ratePercent: parseFloat(rate.ratePercent as string),
+      planId: rest.planId ?? plan?.id ?? null,
     };
   }
 
@@ -93,11 +120,21 @@ export class TiendanubeConfigService {
     };
   }
 
+  private parseShippingConfig(config: TnShippingConfig): ParsedShippingConfig {
+    return {
+      ...config,
+      defaultShippingCost: parseFloat(config.defaultShippingCost as string),
+      defaultShippingCharged: parseFloat(
+        config.defaultShippingCharged as string,
+      ),
+    };
+  }
+
   // --- Public methods ---
 
   async getAll(): Promise<TiendanubeConfigAll> {
-    const [gateways, rates, installments, taxConfig, plans] = await Promise.all(
-      [
+    const [gateways, rates, installments, taxConfig, plans, shipping] =
+      await Promise.all([
         this.gatewayRepo.find({
           where: { isActive: true },
           order: { slug: 'ASC' },
@@ -106,10 +143,10 @@ export class TiendanubeConfigService {
         this.getInstallmentRates(),
         this.getTaxConfig(),
         this.getPlans(),
-      ],
-    );
+        this.getShippingConfig(),
+      ]);
 
-    return { gateways, rates, installments, taxConfig, plans };
+    return { gateways, rates, installments, taxConfig, plans, shipping };
   }
 
   async getGatewaysWithRates(): Promise<
@@ -140,8 +177,22 @@ export class TiendanubeConfigService {
       throw new NotFoundException('Pasarela de pago no encontrada');
     }
 
+    // D-06: planId is honored only for gateways whose fee varies by plan;
+    // every other gateway stores a null-plan ("all plans") row.
+    const planScoped =
+      TN_GATEWAYS_WITH_PLAN_RATES.includes(gateway.slug) &&
+      dto.planId !== undefined;
+    let plan: TnPlan | null = null;
+    if (planScoped) {
+      plan = await this.planRepo.findOne({ where: { id: dto.planId } });
+      if (!plan) {
+        throw new NotFoundException('Plan no encontrado');
+      }
+    }
+
     const newRate = this.gatewayRateRepo.create({
       gateway,
+      plan,
       paymentMethod: dto.paymentMethod,
       withdrawalDays: dto.withdrawalDays,
       ratePercent: String(dto.ratePercent),
@@ -200,6 +251,27 @@ export class TiendanubeConfigService {
     return this.parseTaxConfig(saved);
   }
 
+  async getShippingConfig(): Promise<ParsedShippingConfig | null> {
+    const config = await this.shippingConfigRepo.findOne({
+      where: { isActive: true },
+      order: { createdAt: 'DESC' },
+    });
+
+    return config ? this.parseShippingConfig(config) : null;
+  }
+
+  async updateShippingConfig(
+    dto: UpdateShippingConfigDto,
+  ): Promise<ParsedShippingConfig> {
+    const newConfig = this.shippingConfigRepo.create({
+      defaultShippingCost: String(dto.defaultShippingCost),
+      defaultShippingCharged: String(dto.defaultShippingCharged),
+    });
+
+    const saved = await this.shippingConfigRepo.save(newConfig);
+    return this.parseShippingConfig(saved);
+  }
+
   async getPlans(): Promise<ParsedPlan[]> {
     const plans = await this.planRepo.find({
       where: { isActive: true },
@@ -231,7 +303,7 @@ export class TiendanubeConfigService {
 
   private async getLatestGatewayRates(): Promise<ParsedGatewayRate[]> {
     const rows: TnGatewayRate[] = await this.gatewayRateRepo.query(
-      `SELECT DISTINCT ON (gr.gateway_id, gr.payment_method, gr.withdrawal_days)
+      `SELECT DISTINCT ON (gr.gateway_id, gr.payment_method, gr.withdrawal_days, gr.plan_id)
         gr.id,
         gr.payment_method AS "paymentMethod",
         gr.withdrawal_days AS "withdrawalDays",
@@ -240,6 +312,7 @@ export class TiendanubeConfigService {
         gr.created_at AS "createdAt",
         gr.updated_at AS "updatedAt",
         gr.gateway_id AS "gatewayId",
+        gr.plan_id AS "planId",
         json_build_object(
           'id', gw.id,
           'slug', gw.slug,
@@ -249,7 +322,7 @@ export class TiendanubeConfigService {
       FROM tn_gateway_rates gr
       JOIN tn_payment_gateways gw ON gw.id = gr.gateway_id
       WHERE gr.is_active = true
-      ORDER BY gr.gateway_id, gr.payment_method, gr.withdrawal_days, gr.created_at DESC`,
+      ORDER BY gr.gateway_id, gr.payment_method, gr.withdrawal_days, gr.plan_id, gr.created_at DESC`,
     );
 
     return rows.map((r) => this.parseGatewayRate(r));

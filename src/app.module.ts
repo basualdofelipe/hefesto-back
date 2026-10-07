@@ -13,7 +13,7 @@ import { ProductsModule } from './products/products.module';
 import { SuppliesModule } from './supplies/supplies.module';
 import { SuppliersModule } from './suppliers/suppliers.module';
 import { TiendanubeConfigModule } from './tiendanube-config/tiendanube-config.module';
-import { CalculadoraModule } from './calculadora/calculadora.module';
+import { CalculatorModule } from './calculator/calculator.module';
 import { RolesModule } from './roles/roles.module';
 import { ScenariosModule } from './scenarios/scenarios.module';
 import { UsersModule } from './users/users.module';
@@ -40,7 +40,7 @@ import { AppService } from './app.service';
     CostsModule,
     ExpensesModule,
     TiendanubeConfigModule,
-    CalculadoraModule,
+    CalculatorModule,
     ScenariosModule,
     ProductsModule,
   ],

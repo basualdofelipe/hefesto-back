@@ -1,6 +1,7 @@
 import {
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -14,7 +15,7 @@ import {
   ScenarioCalcResponse,
   ScenarioProductResult,
 } from './dto/scenario-response.dto';
-import { CalculadoraService } from '../calculadora/calculadora.service';
+import { CalculatorService } from '../calculator/calculator.service';
 import { CostsService } from '../costs/costs.service';
 import { ProductsService } from '../products/products.service';
 import { TiendanubeConfigService } from '../tiendanube-config/tiendanube-config.service';
@@ -22,7 +23,7 @@ import type { Permissions } from '../common/types/permission';
 import { User } from '../users/entities/user.entity';
 import { TnPlan } from '../tiendanube-config/entities/tn-plan.entity';
 import { Product } from '../products/entities/product.entity';
-import { CalcResult } from '../calculadora/dto/calc-result.dto';
+import { CalcResult } from '../calculator/dto/calc-result.dto';
 import {
   TN_GATEWAY_PAGO_NUBE,
   TN_PAYMENT_TARJETA,
@@ -31,12 +32,14 @@ import {
 
 @Injectable()
 export class ScenariosService {
+  private readonly logger = new Logger(ScenariosService.name);
+
   constructor(
     @InjectRepository(Scenario)
     private readonly scenarioRepo: Repository<Scenario>,
     @InjectRepository(ScenarioOverride)
     private readonly overrideRepo: Repository<ScenarioOverride>,
-    private readonly calculadoraService: CalculadoraService,
+    private readonly calculatorService: CalculatorService,
     private readonly costsService: CostsService,
     private readonly productsService: ProductsService,
     private readonly tiendanubeConfigService: TiendanubeConfigService,
@@ -222,7 +225,7 @@ export class ScenariosService {
       throw new NotFoundException('Escenario no encontrado');
     }
 
-    // CRITICAL: Wrap delete+insert in a transaction (review fix)
+    // Delete + insert in one transaction so a failed insert never leaves the scenario without overrides
     const queryRunner =
       this.scenarioRepo.manager.connection.createQueryRunner();
     await queryRunner.connect();
@@ -256,17 +259,45 @@ export class ScenariosService {
 
   // ─── Calculate margins for all products in scenario ───────────
 
+  /**
+   * A per-product calc failure must not abort the whole margin table, but it
+   * must leave a trace: resolveRates throws NotFoundException for a missing
+   * plan or rate tuple (e.g. a scenario stored with withdrawal_days = NULL
+   * resolves to 1 d, which Pago Nube tarjeta has no row for), and a silent
+   * null would hide that config gap behind a dash in the UI.
+   */
+  private calcForwardOrNull(
+    params: Parameters<CalculatorService['calcForward']>[0],
+    context: { scenarioId: string; productId: string; kind: 'sim' | 'real' },
+  ): CalcResult | null {
+    try {
+      return this.calculatorService.calcForward(params);
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      this.logger.warn(
+        `calcForward (${context.kind}) failed for product ${context.productId} ` +
+          `in scenario ${context.scenarioId} ` +
+          `[${params.gatewaySlug}/${params.paymentMethod}/${params.withdrawalDays}d` +
+          `/x${params.installments}/${params.planSlug ?? 'default'}]: ${reason}; ` +
+          'result set to null',
+      );
+      return null;
+    }
+  }
+
   async calculate(id: string, userId: string): Promise<ScenarioCalcResponse> {
     // Load scenario with overrides
     const scenario = await this.findOne(id, userId);
 
-    // Load TN config
+    // Load TN config; the configured shipping default applies to sim and real alike
     const config = await this.tiendanubeConfigService.getAll();
+    const shippingCharged = config.shipping?.defaultShippingCharged ?? 0;
+    const shippingCost = config.shipping?.defaultShippingCost ?? 0;
 
     // Load all product costs
     const costMap = await this.costsService.calculateAll();
 
-    // CRITICAL: Load ALL products including inactive (review fix)
+    // Include inactive products: a scenario may override a product deactivated after it was saved
     const products = await this.productsService.findAll(true);
 
     // Build override map: productId -> overridePrice (number)
@@ -289,7 +320,7 @@ export class ScenariosService {
     for (const product of products) {
       const cost = costMap.get(product.id)?.cost ?? 0;
 
-      // CRITICAL: currentPrice is STRING from TypeORM decimal column
+      // currentPrice is a string: TypeORM returns decimal columns as strings
       const realPrice =
         product.currentPrice !== null && product.currentPrice !== undefined
           ? parseFloat(product.currentPrice as string)
@@ -310,44 +341,43 @@ export class ScenariosService {
 
       const productType = product.type?.name ?? '';
 
-      // CRITICAL: Per-product error handling (review fix)
       let simResult: CalcResult | null = null;
       let realResult: CalcResult | null = null;
 
       if (effectivePrice !== null && effectivePrice > 0) {
-        try {
-          simResult = this.calculadoraService.calcForward({
-            precioVenta: effectivePrice,
-            costoEnvio: 0,
-            costoProducto: cost,
+        simResult = this.calcForwardOrNull(
+          {
+            sellingPrice: effectivePrice,
+            shippingCharged,
+            shippingCost,
+            productCost: cost,
             gatewaySlug,
             paymentMethod,
             withdrawalDays,
             installments,
             planSlug,
             config,
-          });
-        } catch {
-          simResult = null; // per-product failure -- don't crash the loop
-        }
+          },
+          { scenarioId: scenario.id, productId: product.id, kind: 'sim' },
+        );
       }
 
       if (realPrice !== null && realPrice > 0) {
-        try {
-          realResult = this.calculadoraService.calcForward({
-            precioVenta: realPrice,
-            costoEnvio: 0,
-            costoProducto: cost,
+        realResult = this.calcForwardOrNull(
+          {
+            sellingPrice: realPrice,
+            shippingCharged,
+            shippingCost,
+            productCost: cost,
             gatewaySlug,
             paymentMethod,
             withdrawalDays,
             installments,
             planSlug,
             config,
-          });
-        } catch {
-          realResult = null;
-        }
+          },
+          { scenarioId: scenario.id, productId: product.id, kind: 'real' },
+        );
       }
 
       results.push({

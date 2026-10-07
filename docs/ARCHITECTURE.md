@@ -37,8 +37,8 @@ AppModule
 ├── ExpensesModule
 ├── ProductsModule
 ├── TiendanubeConfigModule        rate tables, installment rates, tax config, plans
-├── CalculadoraModule ───────────> TiendanubeConfigModule, CostsModule, ProductsModule
-└── ScenariosModule ─────────────> CalculadoraModule, CostsModule, ProductsModule,
+├── CalculatorModule ────────────> TiendanubeConfigModule, CostsModule, ProductsModule
+└── ScenariosModule ─────────────> CalculatorModule, CostsModule, ProductsModule,
                                     TiendanubeConfigModule
 ```
 
@@ -211,7 +211,7 @@ TypeORM maps PostgreSQL `decimal`/`numeric` columns to JavaScript strings by def
 - `TnGatewayRate.ratePercent: string`, `TnInstallmentRate.ratePercent: string`
 - `TnTaxConfig.ivaRate: string`, `iibbRate: string`
 
-Conversion to `number` happens at **read time**, as late as possible, at the service layer (`parseFloat()`). `TiendanubeConfigService` exposes `Parsed*` interfaces for all rate entities to make the type boundary explicit. The test suite (`calculadora.service.spec.ts`) covers the `calcBatch` path specifically because `currentPrice` arriving as a string is a common source of silent bugs.
+Conversion to `number` happens at **read time**, as late as possible, at the service layer (`parseFloat()`). `TiendanubeConfigService` exposes `Parsed*` interfaces for all rate entities to make the type boundary explicit. The test suite (`calculator.service.spec.ts`) covers the `calcBatch` path specifically because `currentPrice` arriving as a string is a common source of silent bugs.
 
 ---
 
@@ -241,61 +241,63 @@ Line cost = `unitPrice × quantity`, rounded to 2 decimal places. The total is t
 
 ---
 
-## Tiendanube Pricing Calculator (`CalculadoraService`)
+## Tiendanube Pricing Calculator (`CalculatorService`)
 
 ### Domain context
 
 Selling on Tiendanube (Argentine e-commerce platform) involves several cost layers deducted from the gross sale before the seller receives money:
 
-- **Gateway commission** (`comisionPasarela`) — a percentage of the total paid by the buyer (product + shipping), which varies by gateway, payment method, and withdrawal settlement period
-- **IVA on the commission** — Argentine VAT (21%) is charged on the gateway fee, but the seller recovers IVA credits from the product cost
-- **Installment financing cost** (`costoFinanciacion`) — if the buyer pays in installments, the gateway charges the seller the financing cost
+- **Gateway commission** (`gatewayFee`) — a percentage of the total paid by the buyer (product + shipping charged), which varies by gateway, payment method, and withdrawal settlement period
+- **IVA on the commission** — Argentine VAT (21%) is charged on the gateway fee, but the seller recovers IVA credits from the product cost, the gateway fee and the shipping cost
+- **Installment financing cost** (`financingCost`) — if the buyer pays in installments, the gateway charges the seller the financing cost
 - **CPT (Costo Por Transacción)** — Tiendanube's own platform fee, which depends on the seller's plan and the gateway used (Pago Nube has 0% CPT on most plans)
-- **IIBB retention** (`retencionIIBB`) — Ingresos Brutos, a provincial gross revenue tax retained at source
+- **IIBB withholding** (`iibbWithholding`) — Ingresos Brutos, a provincial gross revenue tax retained at source
 
-### calcForward — the 14-step formula
+### calcForward — the 12-step formula
 
-`calcForward(params)` is a **pure synchronous function**. It receives an already-resolved `TiendanubeConfigAll` object so it can be called in hot loops (e.g., `calcBatch`) without extra DB queries per product.
+`calcForward(params)` is a **pure synchronous function**. It receives an already-loaded `TiendanubeConfigAll` object (rates are picked out of it by `resolveRates`, no I/O) so it can be called in hot loops (e.g., `calcBatch`) without extra DB queries per product.
 
 Steps (no intermediate rounding — rounding only on the two final outputs):
 
 ```
-1.  totalCliente      = precioVenta + costoEnvio
-2.  tasaBase          = gateway rate %  (e.g. 3.49)
-3.  tasaConIVA        = tasaBase × (1 + ivaRate)        // ivaRate = 0.21
-4.  comisionPasarela  = totalCliente × (tasaConIVA / 100)
-5.  tasaCuotas        = installment rate %
-6.  costoFinanciacion = totalCliente × (tasaCuotas / 100)
-7.  cpt               = totalCliente × (cptRate / 100)
-8a. baseGravada       = totalCliente / (1 + ivaRate)
-8b. ivaDebito         = totalCliente − baseGravada
-8c. ivaCreditoProducto= costoProducto × ivaRate
-8d. ivaCreditoComision= comisionPasarela × (ivaRate / (1 + ivaRate))
-8e. ivaNeto           = ivaDebito − ivaCreditoProducto − ivaCreditoComision
-9.  retencionIIBB     = totalCliente × iibbRate          // iibbRate = 0.035
-10. netoRecibido      = totalCliente − comisionPasarela − costoFinanciacion
-                                     − retencionIIBB − cpt
-11. costoProductoConIVA = costoProducto × (1 + ivaRate)
-12. gananciaReal      = netoRecibido − costoProductoConIVA − ivaNeto
-13. margen %          = (gananciaReal / precioVenta) × 100
+1.  customerTotal       = sellingPrice + shippingCharged
+2.  baseRate            = gateway rate %  (e.g. 3.49)
+3.  rateWithIva         = baseRate × (1 + ivaRate)        // ivaRate = 0.21
+4.  gatewayFee          = customerTotal × (rateWithIva / 100)
+5.  financingCost       = customerTotal × (installmentRate / 100)
+6.  cpt                 = customerTotal × (cptRate / 100)
+7a. taxableBase         = customerTotal / (1 + ivaRate)
+7b. ivaDebit            = customerTotal − taxableBase
+7c. ivaCreditProduct    = productCost × ivaRate
+7d. ivaCreditGatewayFee = gatewayFee × (ivaRate / (1 + ivaRate))
+7e. ivaCreditShipping   = shippingCost × (ivaRate / (1 + ivaRate))
+7f. ivaNet              = ivaDebit − ivaCreditProduct − ivaCreditGatewayFee − ivaCreditShipping
+8.  iibbWithholding     = customerTotal × iibbRate          // iibbRate = 0.035
+9.  netReceived         = customerTotal − gatewayFee − financingCost
+                                        − iibbWithholding − cpt
+10. productCostWithIva  = productCost × (1 + ivaRate)
+11. realProfit          = netReceived − productCostWithIva − shippingCost − ivaNet
+12. marginPercent       = (realProfit / sellingPrice) × 100
 
-    [round gananciaReal and margen to 2 decimal places]
+    [round realProfit and marginPercent to 2 decimal places]
 ```
+
+Shipping enters through two separate fields: `shippingCharged` (what the buyer pays, so it inflates every fee base) and `shippingCost` (what the seller pays the carrier, subtracted in full in step 11 with its IVA recovered in step 7e). The whole chain assumes the seller is **Responsable Inscripto** — IVA débito on the customer total, IVA crédito on product cost, gateway fee and shipping cost; Monotributo is not modelled.
 
 The CPT rate branches on whether the gateway is `pago_nube`: for Pago Nube, `plan.cptPagoNube` is used; for all other gateways, `plan.cptOtherGateways` is used. This matches Tiendanube's pricing structure where Pago Nube is its own gateway with a waived CPT.
 
 ### calcInverse — binary search for target profit
 
-`calcInverse(params)` answers "at what selling price will I earn `gananciaDeseada` with these rates?" Because `gananciaReal` is a monotonically increasing function of `precioVenta`, binary search converges in at most 100 iterations (epsilon = 0.01 ARS).
+`calcInverse(params)` answers "at what selling price will I earn `targetProfit` with these rates?" Because `realProfit` is a monotonically increasing function of `sellingPrice`, binary search converges in at most 100 iterations (epsilon = 0.01 ARS). `targetProfit = 0` is accepted (break-even price).
 
 Guard conditions checked before the search:
-- `costoProducto <= 0` → error (undefined without a known cost)
-- `gananciaDeseada < 0` → error (caller likely mixed units)
-- `gananciaReal at upper bound (costoProducto × 20 or 100,000) < gananciaDeseada` → error (unreachable)
+- `productCost <= 0` → error (undefined without a known cost)
+- `targetProfit < 0` → error (caller likely mixed units)
+- `realProfit at upper bound (productCost × 20 or 100,000) < targetProfit` → error (unreachable)
 
 ### calcBatch — full-catalog margin snapshot
 
-`calcBatch(dto)` loads config, costs, and products in **5 total queries** (1 config `getAll` via `Promise.all`, 2 from `calculateAll`, 2 from `productsService.findAll`), then calls `calcForward` in a JavaScript loop — no additional DB queries per product. `costoEnvio` is `0` in batch mode; the intent is margin at the current list price without shipping.
+`calcBatch(dto)` loads config, costs, and products in **5 total queries** (1 config `getAll`, 2 from `calculateAll`, 2 from `productsService.findAll`), then calls `calcForward` in a JavaScript loop — no additional DB queries per product. Shipping comes from the configured defaults (`config.shipping.defaultShippingCharged` / `defaultShippingCost`, `0` when no shipping row exists); the intent is margin at the current list price under the store's usual shipping terms.
 
 `currentPrice` from `ProductsService.findAll()` is typed as `string | null` (TypeORM decimal). `calcBatch` explicitly calls `parseFloat()` and guards against `NaN` before computing.
 
@@ -358,13 +360,13 @@ src/
   products/                  CRUD for finished products + BOM management + product prices
   expenses/                  expense categories and expense entries
   tiendanube-config/         rate tables configuration CRUD + getAll() aggregator
-  calculadora/               calcForward, calcInverse, calcBatch (pure domain logic)
+  calculator/                calcForward, calcInverse, calcBatch (pure domain logic)
   scenarios/                 user-scoped what-if scenarios with per-product overrides
   constants/
     tiendanube.ts            slug constants: TN_GATEWAY_PAGO_NUBE, TN_PAYMENT_TARJETA, TN_PLAN_ESENCIAL
 ```
 
-`CostsModule` deliberately has no controller — it exists purely to be injected by `CalculadoraModule`, `ScenariosModule`, and `ProductsModule`. Exposing cost calculation as a standalone endpoint would require duplicating auth/permission context that those consumers already have.
+`CostsModule` deliberately has no controller — it exists purely to be injected by `CalculatorModule`, `ScenariosModule`, and `ProductsModule`. Exposing cost calculation as a standalone endpoint would require duplicating auth/permission context that those consumers already have.
 
 ---
 

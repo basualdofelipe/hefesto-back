@@ -15,7 +15,7 @@
  *
  * Only a real PostgreSQL connection exercises both paths. This spec runs
  * against the test DB (port 5433, via setup-e2e.ts) with migrationsRun: true,
- * meaning the seed admin (basualdofelipe@gmail.com) is always present.
+ * meaning the seed admin (`ADMIN_EMAIL`) is always present.
  *
  * REQUIREMENT: docker compose up -d postgres-test (postgres-test on port 5433)
  * must be running before executing this suite. Run with:
@@ -48,6 +48,7 @@ import { UsersService } from '../src/users/users.service';
 import { User } from '../src/users/entities/user.entity';
 import { Role } from '../src/roles/entities/role.entity';
 import { Scenario } from '../src/scenarios/entities/scenario.entity';
+import { ADMIN_EMAIL, getDemoEmail } from '../src/constants/branding';
 
 // Unique prefix for all test-created rows — makes cleanup safe and targeted.
 const TEST_PREFIX = 'e2e-admin-guard-';
@@ -66,10 +67,15 @@ describe('UsersService admin-guard integration (real Postgres)', () => {
   let adminRole: Role;
   let editorRole: Role;
 
-  // The seed admin is always present after migrationsRun: true.
+  // The seed admin is always present after migrationsRun: true. Same
+  // expression as the CreateUserTable seed (ADMIN_EMAIL env, neutral fallback),
+  // so the suite is green on any DB regardless of who seeded it.
   // We NEVER hard-delete it — only deactivate temporarily in a transaction
   // when a test needs to isolate "exactly 1 active admin".
-  const SEED_ADMIN_EMAIL = 'basualdofelipe@gmail.com';
+  const SEED_ADMIN_EMAIL = ADMIN_EMAIL;
+  // Every admin the migrations seed (SeedDemoUser adds a second ADMIN):
+  // all of them must be deactivated to reach "exactly 1 active admin".
+  const SEED_ADMIN_EMAILS = [ADMIN_EMAIL, getDemoEmail()];
 
   beforeAll(async () => {
     moduleFixture = await Test.createTestingModule({
@@ -108,15 +114,15 @@ describe('UsersService admin-guard integration (real Postgres)', () => {
    */
   beforeEach(async () => {
     await dataSource.query(
-      `UPDATE users SET is_active = true WHERE email = $1`,
-      [SEED_ADMIN_EMAIL],
+      `UPDATE users SET is_active = true WHERE email = ANY($1)`,
+      [SEED_ADMIN_EMAILS],
     );
   });
 
   /**
    * Delete all test-prefixed rows after each test to isolate runs.
    * Order: scenarios → users (FK: scenarios.user_id → users.id).
-   * The seed admin (basualdofelipe@gmail.com) is never deleted here.
+   * The seed admin (`ADMIN_EMAIL`) is never deleted here.
    */
   afterEach(async () => {
     // Delete test scenarios (identified by the test prefix in the name)
@@ -127,10 +133,10 @@ describe('UsersService admin-guard integration (real Postgres)', () => {
     await dataSource.query(`DELETE FROM users WHERE email LIKE $1`, [
       `${TEST_PREFIX}%`,
     ]);
-    // Restore seed admin to active (in case a test deactivated it)
+    // Restore seeded admins to active (in case a test deactivated them)
     await dataSource.query(
-      `UPDATE users SET is_active = true WHERE email = $1`,
-      [SEED_ADMIN_EMAIL],
+      `UPDATE users SET is_active = true WHERE email = ANY($1)`,
+      [SEED_ADMIN_EMAILS],
     );
   });
 
@@ -194,17 +200,17 @@ describe('UsersService admin-guard integration (real Postgres)', () => {
   // Test 2: last-admin guard returns 400 (correct reconciliation with seed)
   // ─────────────────────────────────────────────────────────────────
   it('Test 2 (BLOCKER 1): last-admin guard rejects with BadRequestException (not 500) when deactivating the real last active admin', async () => {
-    // BASELINE: the seed admin (basualdofelipe@gmail.com) is always active.
+    // BASELINE: the seeded admins (`ADMIN_EMAIL`, demo) are always active.
     // We need "exactly 1 active admin" for the guard to fire. Strategy:
-    // temporarily deactivate the seed admin so that a freshly created test
-    // admin becomes the sole active admin, then try to deactivate that test
-    // admin and expect BadRequestException.
+    // temporarily deactivate every seeded admin so that a freshly created
+    // test admin becomes the sole active admin, then try to deactivate that
+    // test admin and expect BadRequestException.
     //
-    // The seed admin is NEVER hard-deleted — only SET is_active = false for
-    // the duration of this test. afterEach restores it to true.
+    // Seeded admins are NEVER hard-deleted — only SET is_active = false for
+    // the duration of this test. afterEach restores them to true.
     await dataSource.query(
-      `UPDATE users SET is_active = false WHERE email = $1`,
-      [SEED_ADMIN_EMAIL],
+      `UPDATE users SET is_active = false WHERE email = ANY($1)`,
+      [SEED_ADMIN_EMAILS],
     );
 
     // Count active admins now to confirm the baseline is 0 (besides the one

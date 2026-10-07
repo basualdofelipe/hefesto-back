@@ -37,8 +37,12 @@ REST API backend for **Hefesto** — a cost management and pricing tool for a le
 | Costs | (service) | BOM-based dynamic cost engine — calculates cost from current supply prices |
 | Expenses | `/api/expenses` | Business expense log with category filtering |
 | Tiendanube Config | `/api/tiendanube-config` | Payment gateways, installment rates, tax config (IVA/IIBB), plans |
-| Calculadora | `/api/calculadora` | Forward pricing (margin from sell price), inverse pricing (sell price from target margin), batch margin across all products |
+| Calculator | `/api/calculator` | Forward pricing (margin from sell price), inverse pricing (sell price from target margin), batch margin across all products |
 | Scenarios | `/api/scenarios` | Named what-if pricing scenarios with per-product price overrides and margin calculation |
+
+### Supuesto fiscal
+
+The pricing formula behind `/api/calculator` (and the scenarios that reuse it) assumes the seller is **Responsable Inscripto**: IVA débito is computed on the customer total, and IVA crédito is recovered on the product cost, the gateway fee and the shipping cost. Monotributo is not modelled.
 
 ---
 
@@ -60,7 +64,7 @@ Roles are fully custom: each role stores 11 boolean permission flags. The flags 
 | `can_edit_supplies` | Create/update supplies, suppliers |
 | `can_view_expenses` | Read expenses |
 | `can_edit_expenses` | Create/update/delete expenses |
-| `can_use_calculator` | Calculadora endpoints |
+| `can_use_calculator` | Calculator endpoints |
 | `can_manage_scenarios` | Scenarios CRUD and calculation |
 | `can_view_dashboard` | Dashboard data access |
 | `can_manage_config` | Update Tiendanube config (rates, taxes, plans) |
@@ -172,7 +176,7 @@ src/
 │   ├── guards/             # JwtAuthGuard, PermissionsGuard
 │   └── strategies/         # passport-jwt strategy
 ├── catalogs/               # Reference data dimensions (types, colors, sizes, etc.)
-├── calculadora/            # Forward / inverse / batch pricing calculator
+├── calculator/             # Forward / inverse / batch pricing calculator
 ├── common/
 │   ├── entities/           # BaseEntity (UUID PK, createdAt, updatedAt)
 │   ├── filters/            # HttpExceptionFilter
@@ -300,6 +304,5 @@ Deliberate engineering decisions and their accepted trade-offs — documented ra
 
 - **Single source of truth for permissions.** The 11-permission set is currently expressed in the `roles` table columns, the `permission.ts` type/const, and the frontend mirror. A shared definition (codegen or a small shared package) would remove the cross-boundary drift risk.
 - **Response DTOs on all controllers.** A few endpoints (`auth/me`, users) return TypeORM entities directly. No secret columns exist today, but explicit response DTOs would harden the contract against future leakage.
-- **Status-code contract fix.** Calculadora `POST` endpoints return `201` while their Swagger docs declare `200` — add `@HttpCode(200)`.
 - **Integration tests against a real database.** The concurrency guard (SERIALIZABLE last-admin) and the raw `DISTINCT ON` queries are unit-tested with mocks; Testcontainers-backed integration tests would verify them against real Postgres.
 - **Platform hardening.** Rate-limiting / idempotency keys on mutating batch endpoints, structured logging with correlation IDs, and an ADR documenting the boolean-permission-columns vs. join-table decision.

@@ -1,13 +1,13 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { ConflictException, NotFoundException } from '@nestjs/common';
+import { ConflictException, Logger, NotFoundException } from '@nestjs/common';
 import { QueryRunner } from 'typeorm';
 
 // These imports will resolve after Task 1 creates the files
 import { ScenariosService } from './scenarios.service';
 import { Scenario } from './entities/scenario.entity';
 import { ScenarioOverride } from './entities/scenario-override.entity';
-import { CalculadoraService } from '../calculadora/calculadora.service';
+import { CalculatorService } from '../calculator/calculator.service';
 import { CostsService } from '../costs/costs.service';
 import { ProductsService } from '../products/products.service';
 import { TiendanubeConfigService } from '../tiendanube-config/tiendanube-config.service';
@@ -30,7 +30,7 @@ describe('ScenariosService', () => {
     delete: jest.fn(),
   };
 
-  const mockCalculadoraService = {
+  const mockCalculatorService = {
     calcForward: jest.fn(),
   };
 
@@ -62,8 +62,8 @@ describe('ScenariosService', () => {
           useValue: mockOverrideRepo,
         },
         {
-          provide: CalculadoraService,
-          useValue: mockCalculadoraService,
+          provide: CalculatorService,
+          useValue: mockCalculatorService,
         },
         {
           provide: CostsService,
@@ -170,7 +170,7 @@ describe('ScenariosService', () => {
 
   // SCEN-03: Calculate delegates to calcForward and includes inactive products
   describe('calculate', () => {
-    it('should call calculadoraService.calcForward for each product with effective price', async () => {
+    it('should call calculatorService.calcForward for each product with effective price', async () => {
       // Arrange
       const scenario = {
         id: 'scenario-1',
@@ -200,7 +200,7 @@ describe('ScenariosService', () => {
         new Map([['prod-1', { cost: 30000 }]]),
       );
 
-      // NOTE: findAll(true) -- includes inactive products (review fix)
+      // findAll(true) includes inactive products
       mockProductsService.findAll.mockResolvedValue([
         {
           id: 'prod-1',
@@ -214,14 +214,14 @@ describe('ScenariosService', () => {
         },
       ]);
 
-      const mockCalcResult = { gananciaReal: 50000, margen: 52.6 };
-      mockCalculadoraService.calcForward.mockReturnValue(mockCalcResult);
+      const mockCalcResult = { realProfit: 50000, marginPercent: 52.6 };
+      mockCalculatorService.calcForward.mockReturnValue(mockCalcResult);
 
       // Act
       const result = await service.calculate('scenario-1', USER_ID);
 
       // Assert
-      expect(mockCalculadoraService.calcForward).toHaveBeenCalled();
+      expect(mockCalculatorService.calcForward).toHaveBeenCalled();
       expect(mockProductsService.findAll).toHaveBeenCalledWith(true); // includes inactive
       expect(result.results).toHaveLength(1);
       expect(result.results[0].overridePrice).toBe(95000);
@@ -229,7 +229,104 @@ describe('ScenariosService', () => {
       expect(result.results[0].simResult).toEqual(mockCalcResult);
     });
 
-    it('should handle calcForward errors per product without crashing the loop', async () => {
+    // R2 / D-03: the configured shipping default reaches BOTH calcForward calls
+    describe('configured shipping default', () => {
+      const scenario = {
+        id: 'scenario-1',
+        name: 'Test',
+        gatewaySlug: 'pago_nube',
+        paymentMethod: 'tarjeta_debito_credito',
+        withdrawalDays: 1,
+        installments: 1,
+        plan: { slug: 'esencial' },
+        overrides: [{ product: { id: 'prod-1' }, overridePrice: '95000' }],
+        user: { id: USER_ID },
+        isPublic: false,
+      };
+      const baseConfig = {
+        gateways: [],
+        rates: [],
+        installments: [],
+        taxConfig: null,
+        plans: [],
+      };
+
+      beforeEach(() => {
+        mockScenarioRepo.findOne.mockResolvedValue(scenario);
+        mockCostsService.calculateAll.mockResolvedValue(
+          new Map([['prod-1', { cost: 30000 }]]),
+        );
+        mockProductsService.findAll.mockResolvedValue([
+          {
+            id: 'prod-1',
+            currentPrice: '80000',
+            isActive: true,
+            type: { name: 'Billetera' },
+            name: { name: 'Hefesto' },
+            finish: { name: 'Lisa' },
+            color: { name: 'Marron' },
+            size: null,
+          },
+        ]);
+        mockCalculatorService.calcForward.mockReturnValue({
+          realProfit: 50000,
+          marginPercent: 52.6,
+        });
+      });
+
+      it('passes shippingCharged/shippingCost 7315 to both the override (sim) and real calcForward calls', async () => {
+        mockTiendanubeConfigService.getAll.mockResolvedValue({
+          ...baseConfig,
+          shipping: { defaultShippingCost: 7315, defaultShippingCharged: 7315 },
+        });
+
+        await service.calculate('scenario-1', USER_ID);
+
+        expect(mockCalculatorService.calcForward).toHaveBeenCalledWith(
+          expect.objectContaining({
+            sellingPrice: 95000,
+            shippingCharged: 7315,
+            shippingCost: 7315,
+          }),
+        );
+        expect(mockCalculatorService.calcForward).toHaveBeenCalledWith(
+          expect.objectContaining({
+            sellingPrice: 80000,
+            shippingCharged: 7315,
+            shippingCost: 7315,
+          }),
+        );
+      });
+
+      it('passes shippingCharged/shippingCost 0 to both calls when no shipping default is configured', async () => {
+        mockTiendanubeConfigService.getAll.mockResolvedValue({
+          ...baseConfig,
+          shipping: null,
+        });
+
+        await service.calculate('scenario-1', USER_ID);
+
+        expect(mockCalculatorService.calcForward).toHaveBeenCalledWith(
+          expect.objectContaining({
+            sellingPrice: 95000,
+            shippingCharged: 0,
+            shippingCost: 0,
+          }),
+        );
+        expect(mockCalculatorService.calcForward).toHaveBeenCalledWith(
+          expect.objectContaining({
+            sellingPrice: 80000,
+            shippingCharged: 0,
+            shippingCost: 0,
+          }),
+        );
+      });
+    });
+
+    it('should handle calcForward errors per product without crashing the loop, logging each failure', async () => {
+      const warnSpy = jest
+        .spyOn(Logger.prototype, 'warn')
+        .mockImplementation(() => undefined);
       const scenario = {
         id: 'scenario-1',
         name: 'Test',
@@ -282,15 +379,15 @@ describe('ScenariosService', () => {
 
       // Call order: sim(prod-1), real(prod-1), sim(prod-2), real(prod-2)
       // prod-1 sim throws, prod-1 real also throws, prod-2 sim succeeds, prod-2 real succeeds
-      mockCalculadoraService.calcForward
+      mockCalculatorService.calcForward
         .mockImplementationOnce(() => {
           throw new Error('bad config');
         })
         .mockImplementationOnce(() => {
           throw new Error('bad config');
         })
-        .mockReturnValueOnce({ gananciaReal: 20000, margen: 40 })
-        .mockReturnValueOnce({ gananciaReal: 20000, margen: 40 });
+        .mockReturnValueOnce({ realProfit: 20000, marginPercent: 40 })
+        .mockReturnValueOnce({ realProfit: 20000, marginPercent: 40 });
 
       const result = await service.calculate('scenario-1', USER_ID);
 
@@ -298,9 +395,18 @@ describe('ScenariosService', () => {
       expect(result.results[0].simResult).toBeNull(); // error product gets null
       expect(result.results[0].realResult).toBeNull(); // error product real also null
       expect(result.results[1].simResult).toEqual({
-        gananciaReal: 20000,
-        margen: 40,
+        realProfit: 20000,
+        marginPercent: 40,
       }); // other product OK
+
+      // WR-02: a swallowed calc error must leave a trace with product + cause
+      expect(warnSpy).toHaveBeenCalledTimes(2);
+      for (const [message] of warnSpy.mock.calls) {
+        expect(message).toContain('prod-1');
+        expect(message).toContain('scenario-1');
+        expect(message).toContain('bad config');
+      }
+      warnSpy.mockRestore();
     });
   });
 
