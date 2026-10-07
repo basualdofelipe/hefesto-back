@@ -1,0 +1,111 @@
+name: Promote to Production
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [development]
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "promote" to confirm promotion to production'
+        required: true
+        type: string
+
+# No default token scopes; the promote job asks for exactly what it needs
+permissions: {}
+
+# Never run two promotions against main at the same time
+concurrency:
+  group: promote-to-production
+  cancel-in-progress: false
+
+jobs:
+  detect:
+    name: Detect promotion request
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: |
+      (github.event_name == 'pull_request' && github.event.pull_request.merged == true) ||
+      github.event_name == 'workflow_dispatch'
+
+    outputs:
+      should_promote: ${{ steps.check.outputs.should_promote }}
+
+    steps:
+      - name: Check for production promotion
+        id: check
+        # Untrusted values reach the shell only through env, never through
+        # expressions inside run (script injection)
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+          CONFIRM_INPUT: ${{ github.event.inputs.confirm }}
+        run: |
+          set -euo pipefail
+
+          if [ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]; then
+            if [ "$CONFIRM_INPUT" == "promote" ]; then
+              echo "should_promote=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "should_promote=false" >> "$GITHUB_OUTPUT"
+            fi
+            exit 0
+          fi
+
+          printf '📝 PR Title: %s\n' "$PR_TITLE"
+          printf '🏷️ Labels: %s\n' "$PR_LABELS"
+
+          # Check for [PROD] tag in title or prod label
+          if printf '%s\n' "$PR_TITLE" | grep -qiE '\[PROD\]' || printf '%s\n' "$PR_LABELS" | grep -qiE 'production|prod'; then
+            echo "should_promote=true" >> "$GITHUB_OUTPUT"
+            echo "🚀 Production promotion detected!"
+          else
+            echo "should_promote=false" >> "$GITHUB_OUTPUT"
+            echo "📦 No production promotion requested"
+          fi
+
+  promote:
+    name: Promote development to main
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: detect
+    if: needs.detect.outputs.should_promote == 'true'
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Merge development to main
+        env:
+          PROMOTION_SOURCE: ${{ github.event.pull_request.title || 'Manual promotion' }}
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          echo "📦 Promoting development → main"
+
+          git checkout main
+          git pull origin main
+
+          # Values are printf arguments, never part of the format string
+          MERGE_MESSAGE=$(printf '🚀 Promote development to production\n\nTriggered by: %s\nAuthor: %s' "$PROMOTION_SOURCE" "$GITHUB_ACTOR")
+          git merge origin/development --no-ff -m "$MERGE_MESSAGE"
+
+          git push origin main
+
+          echo "✅ Successfully promoted to production!"
+
+      - name: Create summary
+        run: |
+          set -euo pipefail
+
+          echo "## Production Promotion" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "✅ Successfully merged \`development\` → \`main\`" >> "$GITHUB_STEP_SUMMARY"

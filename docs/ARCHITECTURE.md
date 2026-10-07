@@ -136,6 +136,7 @@ Roles with `isSystem = true` cannot be deleted.
 ### Last-active-admin protection (users.service)
 
 `update()` and `remove()` must prevent the system from being left with zero active admins. This guard involves:
+
 1. Read the victim user (with role) under a **pessimistic write lock**
 2. Compute whether the operation would remove the last active user with `canManageUsers = true`
 3. Count other active admins via `countOtherActiveAdmins()` — a plain `getCount()` with no lock (see below)
@@ -153,6 +154,7 @@ PostgreSQL prohibits `SELECT ... FOR UPDATE` combined with aggregate functions. 
 ### BaseEntity
 
 Every entity extends `BaseEntity`:
+
 ```
 id         uuid  PRIMARY KEY DEFAULT uuid_generate_v4()
 created_at timestamptz DEFAULT now()
@@ -291,6 +293,7 @@ The CPT rate branches on whether the gateway is `pago_nube`: for Pago Nube, `pla
 `calcInverse(params)` answers "at what selling price will I earn `targetProfit` with these rates?" Because `realProfit` is a monotonically increasing function of `sellingPrice`, binary search converges in at most 100 iterations (epsilon = 0.01 ARS). `targetProfit = 0` is accepted (break-even price).
 
 Guard conditions checked before the search:
+
 - `productCost <= 0` → error (undefined without a known cost)
 - `targetProfit < 0` → error (caller likely mixed units)
 - `realProfit at upper bound (productCost × 20 or 100,000) < targetProfit` → error (unreachable)
@@ -309,7 +312,7 @@ A `Scenario` is a named set of calculator parameters (gateway, payment method, p
 
 **Visibility**: A scenario is either private (default) or `isPublic = true`. Public scenarios are readable by all authenticated users but writable only by the owner. Deleting a scenario cascades to its overrides. System admins (`canManageUsers = true`) can delete any scenario for cleanup purposes.
 
-**Ownership transfer on user deletion**: When `UsersService.remove()` deletes a user, it calls `ScenariosService.transferOwnership()` within the same SERIALIZABLE transaction *before* the `DELETE` on the user row. This re-assigns all the victim's scenarios to the deleting admin and appends a suffix (`- <victim name> #<shortId>`) to disambiguate from the admin's own scenarios. The suffix is computed to avoid truncating the discriminator when the base name is long.
+**Ownership transfer on user deletion**: When `UsersService.remove()` deletes a user, it calls `ScenariosService.transferOwnership()` within the same SERIALIZABLE transaction _before_ the `DELETE` on the user row. This re-assigns all the victim's scenarios to the deleting admin and appends a suffix (`- <victim name> #<shortId>`) to disambiguate from the admin's own scenarios. The suffix is computed to avoid truncating the discriminator when the base name is long.
 
 ---
 
@@ -326,6 +329,7 @@ All migrations are in `src/database/migrations/`. Filenames follow the pattern `
 **Index strategy**: All FK columns that appear in `WHERE` clauses have explicit indexes. Columns used as `DISTINCT ON` sort keys have composite descending indexes (`created_at DESC`) so PostgreSQL can satisfy the sort with an index scan rather than a full-table sort.
 
 Example indexes created in migrations:
+
 - `IDX_bom_product_active` — partial index on `supplies_per_product_history(product_id) WHERE is_active = true`
 - `IDX_product_price_created` — composite on `product_price_history(product_id, created_at DESC)`
 - `IDX_tn_gateway_rates_lookup` — composite on `tn_gateway_rates(gateway_id, payment_method, withdrawal_days, created_at DESC)`
@@ -372,14 +376,14 @@ src/
 
 ## Non-Obvious Engineering Decisions
 
-| Decision | Rationale |
-|---|---|
-| JWT re-validates against DB on every request | Role changes take effect immediately without waiting for token expiry (7d). The indexed `findOne` cost is acceptable for internal tool scale. |
-| `decimal` columns typed as `string` in entities | Prevents silent IEEE 754 rounding on Argentine peso amounts. Conversion to `number` happens at service layer, never at entity layer. |
-| `DISTINCT ON` instead of correlated subquery for latest prices | Single-pass PostgreSQL scan; performs well without a separate `MAX(created_at)` group-by join. Requires composite descending index on `(fk_id, created_at DESC)`. |
-| Append-only for prices and BOM | Full audit trail with no extra audit table. Enables historical cost reconstruction. `is_active` flag on BOM rows distinguishes current from superseded without deleting data. |
-| SERIALIZABLE isolation + 40001 → 409 | Last-admin guard is a read-then-write operation that is unsafe at READ COMMITTED. SERIALIZABLE aborts the losing concurrent transaction deterministically; mapping 40001 to 409 surfaces a retry prompt rather than an opaque 500. |
-| Binary search for `calcInverse` | The forward formula has no algebraically invertible closed form because of the IVA netting across multiple components. Binary search converges within 100 iterations to ±0.01 ARS. |
-| No intermediate rounding in `calcForward` | Rounding at each step would accumulate error across 14 steps. Only `gananciaReal` and `margen` are rounded in the final return. |
-| Demo login pinned to a single email constant | Even with `DEMO_LOGIN_ENABLED=true`, the endpoint cannot mint a token for a real account — the pinned email check in `AuthService.validateDemoLogin()` makes it a static credential, not a bypass. |
-| Seed data inside migrations | A fresh Railway deployment reaches a known consistent state on first boot without a separate seeding command. The migration runner is the single source of truth for schema + reference data. |
+| Decision                                                       | Rationale                                                                                                                                                                                                                          |
+| -------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| JWT re-validates against DB on every request                   | Role changes take effect immediately without waiting for token expiry (7d). The indexed `findOne` cost is acceptable for internal tool scale.                                                                                      |
+| `decimal` columns typed as `string` in entities                | Prevents silent IEEE 754 rounding on Argentine peso amounts. Conversion to `number` happens at service layer, never at entity layer.                                                                                               |
+| `DISTINCT ON` instead of correlated subquery for latest prices | Single-pass PostgreSQL scan; performs well without a separate `MAX(created_at)` group-by join. Requires composite descending index on `(fk_id, created_at DESC)`.                                                                  |
+| Append-only for prices and BOM                                 | Full audit trail with no extra audit table. Enables historical cost reconstruction. `is_active` flag on BOM rows distinguishes current from superseded without deleting data.                                                      |
+| SERIALIZABLE isolation + 40001 → 409                           | Last-admin guard is a read-then-write operation that is unsafe at READ COMMITTED. SERIALIZABLE aborts the losing concurrent transaction deterministically; mapping 40001 to 409 surfaces a retry prompt rather than an opaque 500. |
+| Binary search for `calcInverse`                                | The forward formula has no algebraically invertible closed form because of the IVA netting across multiple components. Binary search converges within 100 iterations to ±0.01 ARS.                                                 |
+| No intermediate rounding in `calcForward`                      | Rounding at each step would accumulate error across 14 steps. Only `gananciaReal` and `margen` are rounded in the final return.                                                                                                    |
+| Demo login pinned to a single email constant                   | Even with `DEMO_LOGIN_ENABLED=true`, the endpoint cannot mint a token for a real account — the pinned email check in `AuthService.validateDemoLogin()` makes it a static credential, not a bypass.                                 |
+| Seed data inside migrations                                    | A fresh Railway deployment reaches a known consistent state on first boot without a separate seeding command. The migration runner is the single source of truth for schema + reference data.                                      |

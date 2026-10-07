@@ -1,0 +1,76 @@
+# CI gate for PRs into development and pushes to development/main.
+# Every env value in this file is fake and CI-only; nothing here is a real credential.
+name: CI
+
+on:
+  pull_request:
+    branches: [development]
+  push:
+    branches: [development, main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    name: Lint, format, build, unit and e2e tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        # Same image as the postgres-test service in docker-compose.yml
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: hefesto_test
+          POSTGRES_USER: hefesto
+          POSTGRES_PASSWORD: hefesto_test
+        ports:
+          - 5432:5432
+        # TCP check: during init the server only listens on the unix socket,
+        # so a socket check could report ready before the real server is up
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U hefesto -d hefesto_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          # The repo declares no engines/.nvmrc, so CI pins Node 24 LTS
+          node-version: '24'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Check formatting
+        run: npm run prettier:check
+
+      - name: Build
+        run: npm run build
+
+      - name: Unit tests
+        run: npm test
+
+      # --runInBand: each jest worker boots the app with migrationsRun and they
+      # race on migrations; users-admin-guard is also flaky in parallel
+      - name: E2E tests
+        run: npm run test:e2e -- --runInBand
+        env:
+          DATABASE_URL_TEST: postgresql://hefesto:hefesto_test@localhost:5432/hefesto_test
+          FRONTEND_URL: http://localhost:3000
+          JWT_SECRET: ci-fake-jwt-secret-not-a-real-secret
+          GOOGLE_CLIENT_ID: ci-fake-google-client-id
