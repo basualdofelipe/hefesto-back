@@ -1,0 +1,17 @@
+node_modules
+dist
+coverage
+test
+docs
+scripts
+.git
+.github
+.husky
+.env
+.env.*
+*.md
+*.tsbuildinfo
+docker-compose.yml
+Procfile
+Dockerfile
+.dockerignore
