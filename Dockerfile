@@ -15,7 +15,9 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 # --ignore-scripts: the prepare script calls husky, a devDependency absent here;
 # production dependencies need no install scripts.
-RUN npm ci --omit=dev --ignore-scripts
+# --omit=optional: typeorm's optional peer ts-node would otherwise pull
+# typescript and @swc/core into the runtime; the app runs compiled JS only.
+RUN npm ci --omit=dev --omit=optional --ignore-scripts
 
 # Stage 3: runtime image. App files stay root-owned so the process cannot rewrite its code.
 FROM node:24-alpine AS runtime
