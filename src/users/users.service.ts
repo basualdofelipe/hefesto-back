@@ -11,6 +11,10 @@ import {
   QueryRunner,
   Repository,
 } from 'typeorm';
+import {
+  ADMIN_ROLE_NAME,
+  extractPermissions,
+} from '../common/types/permission';
 import { Role } from '../roles/entities/role.entity';
 import { ScenariosService } from '../scenarios/scenarios.service';
 import { CreateUserDto } from './dto/create-user.dto';
@@ -94,6 +98,13 @@ export class UsersService {
     });
   }
 
+  // D-20: a user counts as admin for the last-admin rule when their role is
+  // ADMIN (whatever its stored flags say) or has canManageUsers = true.
+  // TS form of the rule; countOtherActiveAdmins holds the SQL form.
+  private isAdminForLastAdminRule(role: Role | null | undefined): boolean {
+    return extractPermissions(role).canManageUsers;
+  }
+
   // ─── Helper: count OTHER active admins inside a transaction ───
   //
   // PostgreSQL prohibits FOR UPDATE with aggregate functions (COUNT), so
@@ -110,11 +121,16 @@ export class UsersService {
     manager: EntityManager,
     excludeId: string,
   ): Promise<number> {
+    // D-20: SQL form of isAdminForLastAdminRule (ADMIN role or the flag);
+    // both forms of the one rule must change together. adminName is bound.
     return manager
       .createQueryBuilder(User, 'u')
       .innerJoin('u.role', 'r')
       .where('u.isActive = :active', { active: true })
-      .andWhere('r.canManageUsers = :flag', { flag: true })
+      .andWhere('(r.canManageUsers = :flag OR r.name = :adminName)', {
+        flag: true,
+        adminName: ADMIN_ROLE_NAME,
+      })
       .andWhere('u.id != :id', { id: excludeId })
       .getCount();
   }
@@ -193,9 +209,9 @@ export class UsersService {
 
       // Guard 3: last-active-admin (computed after candidate write)
       const willBeActive = dto.isActive ?? victim.isActive;
-      const willBeAdmin = newRole?.canManageUsers ?? false;
+      const willBeAdmin = this.isAdminForLastAdminRule(newRole);
       const wasAdminActive =
-        victim.isActive && (victim.role?.canManageUsers ?? false);
+        victim.isActive && this.isAdminForLastAdminRule(victim.role);
       const willNoLongerBeAdminActive =
         wasAdminActive && !(willBeActive && willBeAdmin);
       if (willNoLongerBeAdminActive) {
@@ -280,7 +296,7 @@ export class UsersService {
       // Guard: last-active-admin (null-safe on victim.role). Inside the
       // transaction so two concurrent deletes of the penultimate admin
       // serialize on the pessimistic_write lock.
-      if (victim.isActive && (victim.role?.canManageUsers ?? false)) {
+      if (victim.isActive && this.isAdminForLastAdminRule(victim.role)) {
         const otherActiveAdmins = await this.countOtherActiveAdmins(
           queryRunner.manager,
           id,
