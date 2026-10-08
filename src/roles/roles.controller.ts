@@ -19,8 +19,7 @@ import {
 import { RequirePermission } from '../auth/decorators/require-permission.decorator';
 import { CreateRoleDto } from './dto/create-role.dto';
 import { UpdateRoleDto } from './dto/update-role.dto';
-import { Role } from './entities/role.entity';
-import { RolesService } from './roles.service';
+import { RolesService, RoleView } from './roles.service';
 
 @ApiTags('roles')
 @ApiBearerAuth()
@@ -31,9 +30,13 @@ export class RolesController {
   @Get()
   @RequirePermission('can_manage_users')
   @ApiOperation({ summary: 'List all roles with user counts (ADMIN only)' })
-  @ApiResponse({ status: 200, description: 'List of all roles' })
+  @ApiResponse({
+    status: 200,
+    description:
+      'List of all roles with effective permissions; permissionsLocked is true for ADMIN, whose permissions cannot be edited',
+  })
   @ApiResponse({ status: 403, description: 'Forbidden' })
-  async findAll(): Promise<Role[]> {
+  async findAll(): Promise<RoleView[]> {
     return this.rolesService.findAll();
   }
 
@@ -43,7 +46,7 @@ export class RolesController {
   @ApiResponse({ status: 201, description: 'Role created successfully' })
   @ApiResponse({ status: 409, description: 'Role name already exists' })
   @ApiResponse({ status: 403, description: 'Forbidden' })
-  async create(@Body() dto: CreateRoleDto): Promise<Role> {
+  async create(@Body() dto: CreateRoleDto): Promise<RoleView> {
     return this.rolesService.create(dto);
   }
 
@@ -57,7 +60,7 @@ export class RolesController {
   async update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateRoleDto,
-  ): Promise<Role> {
+  ): Promise<RoleView> {
     return this.rolesService.update(id, dto);
   }
 

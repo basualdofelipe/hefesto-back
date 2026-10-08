@@ -9,5 +9,6 @@
   "moduleNameMapper": {
     "^@src/(.*)$": "<rootDir>/../src/$1"
   },
-  "setupFiles": ["./setup-e2e.ts"]
+  "setupFiles": ["./setup-e2e.ts"],
+  "maxWorkers": 1
 }

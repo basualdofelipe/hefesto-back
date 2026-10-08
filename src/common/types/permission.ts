@@ -53,6 +53,30 @@ export const NO_PERMISSIONS: Permissions = {
   canManageUsers: false,
 };
 
+export const ALL_PERMISSIONS: Permissions = {
+  canViewProducts: true,
+  canEditProducts: true,
+  canViewSupplies: true,
+  canEditSupplies: true,
+  canViewExpenses: true,
+  canEditExpenses: true,
+  canUseCalculator: true,
+  canManageScenarios: true,
+  canViewDashboard: true,
+  canManageConfig: true,
+  canManageUsers: true,
+};
+
+/** The seeded system role that always has every permission; system-role names are immutable. */
+export const ADMIN_ROLE_NAME = 'ADMIN';
+
+/** Single place that decides whether a role is ADMIN (exact, case-sensitive name match). */
+export function isAdminRole(
+  role: { name?: unknown } | null | undefined,
+): boolean {
+  return role?.name === ADMIN_ROLE_NAME;
+}
+
 export const PERMISSION_TO_CAMEL: Record<Permission, keyof Permissions> = {
   can_view_products: 'canViewProducts',
   can_edit_products: 'canEditProducts',
@@ -70,6 +94,11 @@ export const PERMISSION_TO_CAMEL: Record<Permission, keyof Permissions> = {
 export function extractPermissions(role: unknown): Permissions {
   if (role == null || typeof role !== 'object') {
     return NO_PERMISSIONS;
+  }
+
+  // D-18: ADMIN has every permission whatever its stored flags say
+  if (isAdminRole(role as { name?: unknown })) {
+    return { ...ALL_PERMISSIONS };
   }
 
   const r = role as Record<string, unknown>;

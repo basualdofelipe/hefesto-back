@@ -14,9 +14,8 @@ import { ProductSize } from './entities/product-size.entity';
 import { ProductType } from './entities/product-type.entity';
 import { SupplyType } from './entities/supply-type.entity';
 import { ExpenseCategory } from './entities/expense-category.entity';
-import { BaseEntity } from '../common/entities/base.entity';
-
-type CatalogEntity = BaseEntity & { name: string };
+import { CatalogItemEntity } from './entities/catalog-item.entity';
+import { assertSameSet, CATALOG_ITEM_ORDER } from './catalog-order';
 
 const VALID_DIMENSIONS = [
   'product-types',
@@ -42,7 +41,7 @@ export class CatalogsService {
 
   private readonly dimensionMap: Record<
     CatalogDimension,
-    Repository<CatalogEntity>
+    Repository<CatalogItemEntity>
   >;
 
   constructor(
@@ -62,20 +61,13 @@ export class CatalogsService {
     private readonly expenseCategoryRepo: Repository<ExpenseCategory>,
   ) {
     this.dimensionMap = {
-      'product-types': this
-        .productTypeRepo as unknown as Repository<CatalogEntity>,
-      'product-names': this
-        .productNameRepo as unknown as Repository<CatalogEntity>,
-      'product-finishes': this
-        .productFinishRepo as unknown as Repository<CatalogEntity>,
-      'product-colors': this
-        .productColorRepo as unknown as Repository<CatalogEntity>,
-      'product-sizes': this
-        .productSizeRepo as unknown as Repository<CatalogEntity>,
-      'supply-types': this
-        .supplyTypeRepo as unknown as Repository<CatalogEntity>,
-      'expense-categories': this
-        .expenseCategoryRepo as unknown as Repository<CatalogEntity>,
+      'product-types': this.productTypeRepo,
+      'product-names': this.productNameRepo,
+      'product-finishes': this.productFinishRepo,
+      'product-colors': this.productColorRepo,
+      'product-sizes': this.productSizeRepo,
+      'supply-types': this.supplyTypeRepo,
+      'expense-categories': this.expenseCategoryRepo,
     };
   }
 
@@ -83,7 +75,7 @@ export class CatalogsService {
     return VALID_DIMENSIONS;
   }
 
-  private getRepository(dimension: string): Repository<CatalogEntity> {
+  private getRepository(dimension: string): Repository<CatalogItemEntity> {
     const repo = this.dimensionMap[dimension as CatalogDimension];
 
     if (!repo) {
@@ -93,17 +85,11 @@ export class CatalogsService {
     return repo;
   }
 
-  async findAll(dimension: string): Promise<CatalogEntity[]> {
-    if (dimension === 'product-sizes') {
-      return this.productSizeRepo.find({
-        order: { sortOrder: 'ASC', name: 'ASC' },
-      });
-    }
-    const repo = this.getRepository(dimension);
-    return repo.find({ order: { name: 'ASC' } });
+  async findAll(dimension: string): Promise<CatalogItemEntity[]> {
+    return this.getRepository(dimension).find({ order: CATALOG_ITEM_ORDER });
   }
 
-  async findOne(dimension: string, id: string): Promise<CatalogEntity> {
+  async findOne(dimension: string, id: string): Promise<CatalogItemEntity> {
     const repo = this.getRepository(dimension);
     const item = await repo.findOne({ where: { id } });
 
@@ -117,7 +103,7 @@ export class CatalogsService {
   async create(
     dimension: string,
     dto: CreateCatalogItemDto,
-  ): Promise<CatalogEntity> {
+  ): Promise<CatalogItemEntity> {
     const repo = this.getRepository(dimension);
 
     try {
@@ -129,7 +115,8 @@ export class CatalogsService {
         dto.skuCode = (parseInt(result.maxCode, 10) || 0) + 1;
       }
 
-      const item = repo.create(dto);
+      const sortOrder = await this.nextSortOrder(repo);
+      const item = repo.create({ ...dto, sortOrder });
       return await repo.save(item);
     } catch (error) {
       if (
@@ -142,17 +129,94 @@ export class CatalogsService {
     }
   }
 
+  /**
+   * New items land last: MAX(sort_order) + 1, or 0 in an empty dimension (D-03).
+   * Concurrent creates may share a value; the name tiebreak keeps the order
+   * deterministic and the next reorder normalizes it (dismissed in the SPEC).
+   */
+  private async nextSortOrder(
+    repo: Repository<CatalogItemEntity>,
+  ): Promise<number> {
+    const result = await repo
+      .createQueryBuilder('item')
+      .select('MAX(item.sortOrder)', 'maxSortOrder')
+      .getRawOne<{ maxSortOrder: number | string | null }>();
+    const maxSortOrder = result?.maxSortOrder;
+
+    return maxSortOrder == null ? 0 : Number(maxSortOrder) + 1;
+  }
+
+  /**
+   * Replaces a dimension's whole order atomically (R2, D-02): the requested
+   * ids must be exactly the current set, and they are renumbered densely
+   * 0..n-1 (D-03) in one statement. Any mismatch is a 400 before any write.
+   */
+  async reorder(
+    dimension: string,
+    ids: string[],
+  ): Promise<CatalogItemEntity[]> {
+    const repo = this.getRepository(dimension);
+
+    await repo.manager.transaction(async (manager): Promise<void> => {
+      // FOR NO KEY UPDATE in id order: concurrent reorders queue on the first
+      // row instead of locking in different orders and deadlocking (40P01).
+      // Not FOR UPDATE: only sort_order (a non-key column) changes, and FOR
+      // UPDATE would conflict with the FOR KEY SHARE that FK checks on
+      // products/supplies/expenses take, blocking (or deadlocking) writers.
+      const current = await manager
+        .createQueryBuilder(repo.target, 'item')
+        .select('item.id', 'id')
+        .orderBy('item.id', 'ASC')
+        .setLock('for_no_key_update')
+        .getRawMany<{ id: string }>();
+
+      assertSameSet(
+        current.map((row) => row.id),
+        ids,
+      );
+
+      if (ids.length === 0) {
+        return;
+      }
+
+      // Identifier from entity metadata (dimension is whitelisted by the map),
+      // never from request text; ids are a bound, DTO-validated uuid[].
+      const table = manager.connection.driver.escape(repo.metadata.tableName);
+      await manager.query(
+        `UPDATE ${table} AS t SET "sort_order" = (v.ord - 1)::smallint
+           FROM unnest($1::uuid[]) WITH ORDINALITY AS v(id, ord)
+          WHERE t."id" = v.id`,
+        [ids],
+      );
+    });
+
+    return this.findAll(dimension);
+  }
+
   async update(
     dimension: string,
     id: string,
     dto: UpdateCatalogItemDto,
-  ): Promise<CatalogEntity> {
+  ): Promise<CatalogItemEntity> {
     const item = await this.findOne(dimension, id);
     const repo = this.getRepository(dimension);
 
+    // PartialType allows an empty body: nothing to write. TypeORM skips
+    // undefined values, so an all-undefined body would only bump updated_at.
+    const hasChanges = Object.values(dto).some((value) => value !== undefined);
+
     try {
-      const merged = repo.merge(item, dto);
-      return await repo.save(merged);
+      if (hasChanges) {
+        // UPDATE only the DTO's columns, never the loaded entity: a sort_order
+        // set by a reorder that committed after the read above is never
+        // written back (WR-05). Not save(): if another request deletes the
+        // row in between, save() INSERTs it again (WR-56); UPDATE matches no
+        // row and answers 404. TypeORM sets updated_at itself.
+        const result = await repo.update({ id: item.id }, dto);
+        if (!result.affected) {
+          throw new NotFoundException('Item no encontrado');
+        }
+      }
     } catch (error) {
       if (
         error instanceof QueryFailedError &&
@@ -162,6 +226,8 @@ export class CatalogsService {
       }
       throw error;
     }
+
+    return this.findOne(dimension, id);
   }
 
   async remove(dimension: string, id: string): Promise<void> {

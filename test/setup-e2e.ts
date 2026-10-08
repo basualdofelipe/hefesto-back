@@ -14,3 +14,6 @@ process.env.FRONTEND_URL = process.env.FRONTEND_URL ?? 'http://localhost:3000';
 process.env.JWT_SECRET = process.env.JWT_SECRET ?? 'test-jwt-secret-for-e2e';
 process.env.GOOGLE_CLIENT_ID =
   process.env.GOOGLE_CLIENT_ID ?? 'test-google-client-id';
+// Deterministic demo default regardless of the developer's .env (Pitfall 11);
+// demo-mode suites set and restore it per test.
+process.env.DEMO_LOGIN_ENABLED = process.env.DEMO_LOGIN_ENABLED ?? 'false';
