@@ -14,9 +14,8 @@ import { ProductSize } from './entities/product-size.entity';
 import { ProductType } from './entities/product-type.entity';
 import { SupplyType } from './entities/supply-type.entity';
 import { ExpenseCategory } from './entities/expense-category.entity';
-import { BaseEntity } from '../common/entities/base.entity';
-
-type CatalogEntity = BaseEntity & { name: string };
+import { CatalogItemEntity } from './entities/catalog-item.entity';
+import { CATALOG_ITEM_ORDER } from './catalog-order';
 
 const VALID_DIMENSIONS = [
   'product-types',
@@ -42,7 +41,7 @@ export class CatalogsService {
 
   private readonly dimensionMap: Record<
     CatalogDimension,
-    Repository<CatalogEntity>
+    Repository<CatalogItemEntity>
   >;
 
   constructor(
@@ -62,20 +61,13 @@ export class CatalogsService {
     private readonly expenseCategoryRepo: Repository<ExpenseCategory>,
   ) {
     this.dimensionMap = {
-      'product-types': this
-        .productTypeRepo as unknown as Repository<CatalogEntity>,
-      'product-names': this
-        .productNameRepo as unknown as Repository<CatalogEntity>,
-      'product-finishes': this
-        .productFinishRepo as unknown as Repository<CatalogEntity>,
-      'product-colors': this
-        .productColorRepo as unknown as Repository<CatalogEntity>,
-      'product-sizes': this
-        .productSizeRepo as unknown as Repository<CatalogEntity>,
-      'supply-types': this
-        .supplyTypeRepo as unknown as Repository<CatalogEntity>,
-      'expense-categories': this
-        .expenseCategoryRepo as unknown as Repository<CatalogEntity>,
+      'product-types': this.productTypeRepo,
+      'product-names': this.productNameRepo,
+      'product-finishes': this.productFinishRepo,
+      'product-colors': this.productColorRepo,
+      'product-sizes': this.productSizeRepo,
+      'supply-types': this.supplyTypeRepo,
+      'expense-categories': this.expenseCategoryRepo,
     };
   }
 
@@ -83,7 +75,7 @@ export class CatalogsService {
     return VALID_DIMENSIONS;
   }
 
-  private getRepository(dimension: string): Repository<CatalogEntity> {
+  private getRepository(dimension: string): Repository<CatalogItemEntity> {
     const repo = this.dimensionMap[dimension as CatalogDimension];
 
     if (!repo) {
@@ -93,17 +85,11 @@ export class CatalogsService {
     return repo;
   }
 
-  async findAll(dimension: string): Promise<CatalogEntity[]> {
-    if (dimension === 'product-sizes') {
-      return this.productSizeRepo.find({
-        order: { sortOrder: 'ASC', name: 'ASC' },
-      });
-    }
-    const repo = this.getRepository(dimension);
-    return repo.find({ order: { name: 'ASC' } });
+  async findAll(dimension: string): Promise<CatalogItemEntity[]> {
+    return this.getRepository(dimension).find({ order: CATALOG_ITEM_ORDER });
   }
 
-  async findOne(dimension: string, id: string): Promise<CatalogEntity> {
+  async findOne(dimension: string, id: string): Promise<CatalogItemEntity> {
     const repo = this.getRepository(dimension);
     const item = await repo.findOne({ where: { id } });
 
@@ -117,7 +103,7 @@ export class CatalogsService {
   async create(
     dimension: string,
     dto: CreateCatalogItemDto,
-  ): Promise<CatalogEntity> {
+  ): Promise<CatalogItemEntity> {
     const repo = this.getRepository(dimension);
 
     try {
@@ -146,7 +132,7 @@ export class CatalogsService {
     dimension: string,
     id: string,
     dto: UpdateCatalogItemDto,
-  ): Promise<CatalogEntity> {
+  ): Promise<CatalogItemEntity> {
     const item = await this.findOne(dimension, id);
     const repo = this.getRepository(dimension);
 
