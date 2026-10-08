@@ -7,7 +7,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { QueryFailedError, Repository } from 'typeorm';
 import { Role } from '../roles/entities/role.entity';
-import { NO_PERMISSIONS } from '../common/types/permission';
+import { ADMIN_ROLE_NAME, NO_PERMISSIONS } from '../common/types/permission';
 import { ScenariosService } from '../scenarios/scenarios.service';
 import { User } from './entities/user.entity';
 import { UsersService } from './users.service';
@@ -23,9 +23,15 @@ describe('UsersService', () => {
 
   const adminRole = {
     id: ADMIN_ROLE_ID,
-    name: 'ADMIN',
+    name: ADMIN_ROLE_NAME,
     isSystem: true,
     ...Object.fromEntries(Object.keys(NO_PERMISSIONS).map((k) => [k, true])),
+  };
+
+  // D-20: the ADMIN role after a visitor turned its stored flags off
+  const adminRoleNoFlag = {
+    ...adminRole,
+    canManageUsers: false,
   };
 
   const editorRole = {
@@ -532,6 +538,70 @@ describe('UsersService', () => {
       );
     });
 
+    describe('D-20: ADMIN role counts as admin even with canManageUsers = false', () => {
+      it('rejects deactivating the last active ADMIN-role user', async () => {
+        const victim = {
+          ...mockUser,
+          id: VICTIM_ID,
+          role: adminRoleNoFlag,
+          isActive: true,
+        };
+        mockTxnQueryBuilder.getOne.mockResolvedValueOnce(victim);
+        mockTxnQueryBuilder.getCount.mockResolvedValueOnce(0);
+
+        await expect(
+          service.update(VICTIM_ID, { isActive: false }, CALLER_ID),
+        ).rejects.toThrow(
+          new BadRequestException(
+            'No se puede dejar el sistema sin administradores activos',
+          ),
+        );
+      });
+
+      it('rejects demoting the last active ADMIN-role user to a non-admin role', async () => {
+        const victim = {
+          ...mockUser,
+          id: VICTIM_ID,
+          role: adminRoleNoFlag,
+          isActive: true,
+        };
+        mockTxnQueryBuilder.getOne.mockResolvedValueOnce(victim);
+        mockQueryRunner.manager.findOne.mockResolvedValueOnce(editorRole);
+        mockTxnQueryBuilder.getCount.mockResolvedValueOnce(0);
+
+        await expect(
+          service.update(VICTIM_ID, { roleId: EDITOR_ROLE_ID }, CALLER_ID),
+        ).rejects.toThrow(
+          new BadRequestException(
+            'No se puede dejar el sistema sin administradores activos',
+          ),
+        );
+      });
+
+      it('allows demoting an ADMIN-role user when another active admin exists', async () => {
+        const victim = {
+          ...mockUser,
+          id: VICTIM_ID,
+          role: adminRoleNoFlag,
+          isActive: true,
+        };
+        mockTxnQueryBuilder.getOne.mockResolvedValueOnce(victim);
+        mockQueryRunner.manager.findOne.mockResolvedValueOnce(editorRole);
+        mockTxnQueryBuilder.getCount.mockResolvedValueOnce(1);
+        mockQueryRunner.manager.save.mockImplementation(
+          (_entity: unknown, u: User) => Promise.resolve(u),
+        );
+
+        const result = await service.update(
+          VICTIM_ID,
+          { roleId: EDITOR_ROLE_ID },
+          CALLER_ID,
+        );
+
+        expect(result.role).toEqual(editorRole);
+      });
+    });
+
     // CR-A1/CR-A2 (updated for UAT gap closure): the last-admin COUNT runs on
     // queryRunner.manager (same transaction as the save). The count does NOT
     // add a pessimistic_write lock on the aggregate — PostgreSQL forbids
@@ -664,6 +734,24 @@ describe('UsersService', () => {
         ...mockUser,
         id: VICTIM_ID,
         role: adminRole,
+        isActive: true,
+      };
+      mockTxnQueryBuilder.getOne.mockResolvedValueOnce(victim);
+      mockTxnQueryBuilder.getCount.mockResolvedValueOnce(0);
+
+      await expect(service.remove(VICTIM_ID, CALLER_ID)).rejects.toThrow(
+        new BadRequestException(
+          'No se puede dejar el sistema sin administradores activos',
+        ),
+      );
+      expect(mockQueryRunner.rollbackTransaction).toHaveBeenCalled();
+    });
+
+    it('D-20: rejects deleting the last active ADMIN-role user whose role has canManageUsers = false', async () => {
+      const victim = {
+        ...mockUser,
+        id: VICTIM_ID,
+        role: adminRoleNoFlag,
         isActive: true,
       };
       mockTxnQueryBuilder.getOne.mockResolvedValueOnce(victim);

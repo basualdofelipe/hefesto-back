@@ -21,6 +21,8 @@ import { UpdateBomDto } from './dto/update-bom.dto';
 import { CreateProductPriceDto } from './dto/create-product-price.dto';
 import { BatchProductPriceDto } from './dto/batch-product-price.dto';
 import { BatchBomDto } from './dto/batch-bom.dto';
+import { CATALOG_ITEM_ORDER } from '../catalogs/catalog-order';
+import { PRODUCT_CATALOG_ORDER } from './product-order';
 
 export interface ProductWithPrice extends Product {
   currentPrice: string | null;
@@ -65,7 +67,7 @@ export class ProductsService {
     const where = includeInactive ? {} : { isActive: true };
     const products = await this.productRepo.find({
       where,
-      order: { type: { name: 'ASC' }, name: { name: 'ASC' } },
+      order: PRODUCT_CATALOG_ORDER,
     });
 
     if (products.length === 0) {
@@ -181,8 +183,11 @@ export class ProductsService {
       throw new NotFoundException('Terminacion no encontrada');
     }
 
+    // Fetched in catalog order so the colors × sizes loop below emits the
+    // batch in product catalog order (type, name and finish are fixed).
     const colors = await this.productColorRepo.find({
       where: { id: In(dto.colorIds) },
+      order: CATALOG_ITEM_ORDER,
     });
     if (colors.length !== dto.colorIds.length) {
       throw new NotFoundException('Uno o mas colores no fueron encontrados');
@@ -190,6 +195,7 @@ export class ProductsService {
 
     const sizes = await this.productSizeRepo.find({
       where: { id: In(dto.sizeIds) },
+      order: CATALOG_ITEM_ORDER,
     });
     if (sizes.length !== dto.sizeIds.length) {
       throw new NotFoundException('Uno o mas talles no fueron encontrados');

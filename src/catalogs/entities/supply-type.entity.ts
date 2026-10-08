@@ -1,8 +1,5 @@
-import { Column, Entity } from 'typeorm';
-import { BaseEntity } from '../../common/entities/base.entity';
+import { Entity } from 'typeorm';
+import { CatalogItemEntity } from './catalog-item.entity';
 
 @Entity('supply_types')
-export class SupplyType extends BaseEntity {
-  @Column({ type: 'varchar', length: 100, unique: true })
-  name!: string;
-}
+export class SupplyType extends CatalogItemEntity {}

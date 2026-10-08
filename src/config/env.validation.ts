@@ -8,7 +8,13 @@ export const envValidationSchema = Joi.object({
   DATABASE_URL: Joi.string().required(),
   FRONTEND_URL: Joi.string().required(),
   JWT_SECRET: Joi.string().required(),
-  GOOGLE_CLIENT_ID: Joi.string().required(),
+  // Google login is off in demo mode, so its client id is only required outside
+  // it. A blank `GOOGLE_CLIENT_ID=` line is accepted in demo mode (R9, D-15).
+  GOOGLE_CLIENT_ID: Joi.string().when('DEMO_LOGIN_ENABLED', {
+    is: 'true',
+    then: Joi.string().allow('').optional(),
+    otherwise: Joi.required(),
+  }),
   DEMO_LOGIN_ENABLED: Joi.string().valid('true', 'false').default('false'),
   DEMO_EMAIL: Joi.string().email().default('demo@hefesto.com'),
   ADMIN_EMAIL: Joi.string().email().default('admin@hefesto.com'),

@@ -5,11 +5,20 @@ import {
 } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
+import {
+  ADMIN_ROLE_NAME,
+  ALL_PERMISSIONS,
+  PERMISSION_TO_CAMEL,
+} from '../common/types/permission';
 import { User } from '../users/entities/user.entity';
 import { CreateRoleDto } from './dto/create-role.dto';
 import { UpdateRoleDto } from './dto/update-role.dto';
 import { Role } from './entities/role.entity';
 import { RolesService } from './roles.service';
+
+const PERMISSION_FIELDS = Object.values(PERMISSION_TO_CAMEL);
+
+const ADMIN_LOCK_MESSAGE = 'No se pueden modificar los permisos del rol ADMIN';
 
 const makeRole = (overrides: Partial<Role> = {}): Role =>
   ({
@@ -37,12 +46,21 @@ const makeRole = (overrides: Partial<Role> = {}): Role =>
 describe('RolesService', () => {
   let service: RolesService;
 
+  // Count the re-read after a write serves with every role it finds.
+  const SAVED_USER_COUNT = 4;
+  // In-memory stand-in for the roles table: save() stores by id, and the
+  // single-role query (where id + getOne) reads it back with its count.
+  let savedById: Map<string, Role>;
+  let queriedId: string | undefined;
+
   // QueryBuilder mock — returned by createQueryBuilder()
   const mockQb = {
     loadRelationCountAndMap: jest.fn().mockReturnThis(),
+    where: jest.fn(),
     orderBy: jest.fn().mockReturnThis(),
     addOrderBy: jest.fn().mockReturnThis(),
     getMany: jest.fn(),
+    getOne: jest.fn(),
   };
 
   const mockRoleRepo = {
@@ -80,6 +98,26 @@ describe('RolesService', () => {
     mockQb.loadRelationCountAndMap.mockReturnThis();
     mockQb.orderBy.mockReturnThis();
     mockQb.addOrderBy.mockReturnThis();
+
+    savedById = new Map();
+    queriedId = undefined;
+    mockRoleRepo.save.mockImplementation((role: Role) => {
+      savedById.set(role.id, role);
+      return Promise.resolve(role);
+    });
+    mockQb.where.mockImplementation(
+      (_condition: string, params: { id: string }) => {
+        queriedId = params.id;
+        return mockQb;
+      },
+    );
+    mockQb.getOne.mockImplementation(() => {
+      const stored =
+        queriedId === undefined ? undefined : savedById.get(queriedId);
+      return Promise.resolve(
+        stored ? { ...stored, userCount: SAVED_USER_COUNT } : null,
+      );
+    });
   });
 
   it('should be defined', () => {
@@ -103,7 +141,39 @@ describe('RolesService', () => {
       );
       expect(mockQb.orderBy).toHaveBeenCalledWith('role.isSystem', 'DESC');
       expect(mockQb.addOrderBy).toHaveBeenCalledWith('role.name', 'ASC');
-      expect(result).toEqual(roles);
+      // D-19: every row carries the server-computed lock
+      expect(result).toEqual([{ ...roles[0], permissionsLocked: false }]);
+    });
+
+    it('serves ADMIN with all 11 effective permissions and locked, other roles with their stored flags', async () => {
+      // ADMIN's stored flags are all false (makeRole default): they must be ignored
+      const admin = makeRole({
+        id: 'admin-id',
+        name: ADMIN_ROLE_NAME,
+        isSystem: true,
+        userCount: 2,
+      });
+      const user = makeRole({
+        id: 'user-id',
+        name: 'USER',
+        isSystem: true,
+        canUseCalculator: true,
+        userCount: 5,
+      });
+      mockQb.getMany.mockResolvedValue([admin, user]);
+
+      const [adminView, userView] = await service.findAll();
+
+      expect(adminView).toMatchObject({
+        id: 'admin-id',
+        name: ADMIN_ROLE_NAME,
+        userCount: 2,
+        ...ALL_PERMISSIONS,
+        permissionsLocked: true,
+      });
+      expect(userView).toEqual({ ...user, permissionsLocked: false });
+      expect(userView.canUseCalculator).toBe(true);
+      expect(userView.canManageUsers).toBe(false);
     });
   });
 
@@ -143,18 +213,21 @@ describe('RolesService', () => {
       await expect(service.create(dto)).rejects.toThrow(ConflictException);
     });
 
-    it('saves and returns the new role when name is unique', async () => {
+    it('saves and returns the new role, re-read with its userCount', async () => {
       const dto: CreateRoleDto = { name: 'VISOR', canViewProducts: true };
       const created = makeRole({ name: 'VISOR', canViewProducts: true });
       mockRoleRepo.findOne.mockResolvedValue(null);
       mockRoleRepo.create.mockReturnValue(created);
-      mockRoleRepo.save.mockResolvedValue(created);
 
       const result = await service.create(dto);
 
       expect(mockRoleRepo.create).toHaveBeenCalledWith(dto);
       expect(mockRoleRepo.save).toHaveBeenCalledWith(created);
-      expect(result).toEqual(created);
+      expect(result).toEqual({
+        ...created,
+        userCount: SAVED_USER_COUNT,
+        permissionsLocked: false,
+      });
     });
   });
 
@@ -201,23 +274,150 @@ describe('RolesService', () => {
       );
     });
 
-    it('merges dto into role and saves on the happy path', async () => {
+    it('merges dto into role, saves, and returns it re-read with its userCount', async () => {
       const role = makeRole({ name: 'EDITOR', isSystem: false });
-      const saved = makeRole({ name: 'EDITOR', canViewProducts: true });
       // dto has no name change — conflict check branch is skipped entirely,
       // so only one findOne call is made (the findOne(id) inside update).
       mockRoleRepo.findOne.mockResolvedValue(role);
       mockRoleRepo.merge.mockImplementation(
         (target: Role, source: Partial<Role>) => Object.assign(target, source),
       );
-      mockRoleRepo.save.mockResolvedValue(saved);
       const dto: UpdateRoleDto = { canViewProducts: true };
 
       const result = await service.update('role-uuid-1', dto);
 
       expect(mockRoleRepo.merge).toHaveBeenCalledWith(role, dto);
-      expect(mockRoleRepo.save).toHaveBeenCalled();
-      expect(result).toEqual(saved);
+      expect(result.canViewProducts).toBe(true);
+      expect(result).toEqual({
+        ...role,
+        userCount: SAVED_USER_COUNT,
+        permissionsLocked: false,
+      });
+    });
+
+    it('throws NotFoundException when the role is gone before the re-read', async () => {
+      mockRoleRepo.findOne.mockResolvedValue(makeRole());
+      mockRoleRepo.merge.mockImplementation(
+        (target: Role, source: Partial<Role>) => Object.assign(target, source),
+      );
+      // Saved, then deleted by another request before the reply is built
+      mockRoleRepo.save.mockImplementation((role: Role) =>
+        Promise.resolve(role),
+      );
+
+      await expect(
+        service.update('role-uuid-1', { description: 'x' }),
+      ).rejects.toThrow(new NotFoundException('Rol no encontrado'));
+    });
+
+    describe('ADMIN permissions are locked (D-18)', () => {
+      const makeAdmin = (): Role =>
+        makeRole({ id: 'admin-id', name: ADMIN_ROLE_NAME, isSystem: true });
+
+      beforeEach(() => {
+        mockRoleRepo.merge.mockImplementation(
+          (target: Role, source: Partial<Role>) =>
+            Object.assign(target, source),
+        );
+      });
+
+      it('rejects turning off any ADMIN permission', async () => {
+        mockRoleRepo.findOne.mockResolvedValue(makeAdmin());
+
+        await expect(
+          service.update('admin-id', { canManageConfig: false }),
+        ).rejects.toThrow(new BadRequestException(ADMIN_LOCK_MESSAGE));
+        expect(mockRoleRepo.save).not.toHaveBeenCalled();
+      });
+
+      it('rejects a change in one permission even when the others are sent unchanged', async () => {
+        mockRoleRepo.findOne.mockResolvedValue(makeAdmin());
+        const dto: UpdateRoleDto = {
+          ...ALL_PERMISSIONS,
+          canViewExpenses: false,
+        };
+
+        await expect(service.update('admin-id', dto)).rejects.toThrow(
+          new BadRequestException(ADMIN_LOCK_MESSAGE),
+        );
+        expect(mockRoleRepo.save).not.toHaveBeenCalled();
+      });
+
+      it('accepts unchanged (all true) permissions and never writes the stored flags', async () => {
+        const admin = makeAdmin();
+        mockRoleRepo.findOne.mockResolvedValue(admin);
+        const dto: UpdateRoleDto = {
+          name: ADMIN_ROLE_NAME,
+          description: 'x',
+          ...ALL_PERMISSIONS,
+        };
+
+        const result = await service.update('admin-id', dto);
+
+        expect(mockRoleRepo.merge).toHaveBeenCalledTimes(1);
+        const [target, merged] = mockRoleRepo.merge.mock.calls[0] as [
+          Role,
+          Partial<Role>,
+        ];
+        expect(target).toBe(admin);
+        expect(PERMISSION_FIELDS.filter((field) => field in merged)).toEqual(
+          [],
+        );
+        expect(merged).toEqual({ name: ADMIN_ROLE_NAME, description: 'x' });
+        // The stored flags stay as they were (all false); the reply is effective
+        expect(admin.canManageConfig).toBe(false);
+        expect(result).toMatchObject({
+          description: 'x',
+          ...ALL_PERMISSIONS,
+          permissionsLocked: true,
+        });
+      });
+
+      it('accepts a description-only PATCH under the usual rules', async () => {
+        mockRoleRepo.findOne.mockResolvedValue(makeAdmin());
+
+        const result = await service.update('admin-id', {
+          description: 'only',
+        });
+
+        expect(mockRoleRepo.merge).toHaveBeenCalledWith(expect.anything(), {
+          description: 'only',
+        });
+        expect(result).toMatchObject({
+          description: 'only',
+          ...ALL_PERMISSIONS,
+          permissionsLocked: true,
+          userCount: SAVED_USER_COUNT,
+        });
+      });
+
+      it('still rejects renaming ADMIN (system role rule)', async () => {
+        mockRoleRepo.findOne.mockResolvedValue(makeAdmin());
+
+        await expect(
+          service.update('admin-id', { name: 'SUPERADMIN' }),
+        ).rejects.toThrow(
+          new BadRequestException(
+            'No se puede cambiar el nombre de un rol de sistema',
+          ),
+        );
+      });
+
+      it('lets a non-ADMIN role change its permissions as before', async () => {
+        const editor = makeRole({ name: 'EDITOR', canViewProducts: false });
+        mockRoleRepo.findOne.mockResolvedValue(editor);
+        const dto: UpdateRoleDto = {
+          canViewProducts: true,
+          canManageUsers: false,
+        };
+
+        const result = await service.update('role-uuid-1', dto);
+
+        expect(mockRoleRepo.merge).toHaveBeenCalledWith(editor, dto);
+        expect(result.canViewProducts).toBe(true);
+        expect(result.canEditProducts).toBe(false);
+        expect(result.permissionsLocked).toBe(false);
+      });
     });
   });
 

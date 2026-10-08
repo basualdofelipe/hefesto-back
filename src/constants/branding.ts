@@ -28,3 +28,15 @@ export const ADMIN_NAME: string = process.env.ADMIN_NAME ?? 'Admin';
  */
 export const getDemoEmail = (): string =>
   process.env.DEMO_EMAIL ?? 'demo@hefesto.com';
+
+/**
+ * Whether this instance runs in demo mode, read from process.env at call-time
+ * (not frozen at module load) so Jest env overrides take effect without
+ * jest.resetModules().
+ *
+ * This is the single reader of the demo switch in the back-end (D-13). Demo
+ * mode enables the pinned demo login, turns Google login off (R8) and makes
+ * the Google credentials optional at boot (R9).
+ */
+export const isDemoMode = (): boolean =>
+  process.env.DEMO_LOGIN_ENABLED === 'true';
