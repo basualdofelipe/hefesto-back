@@ -2,33 +2,38 @@
 -- catalog with a year of history. Every name below is made up.
 --
 -- DESTRUCTIVE. It empties catalogs, suppliers, supplies, products, prices,
--- bills of materials, expenses and scenarios, deletes every user except the
--- demo user and every non-system role. Roles ADMIN/USER, the Tiendanube config
--- and the migrations table are left alone. Never run it against a real
--- instance.
+-- bills of materials, expenses, scenarios and the whole Tiendanube config and
+-- reloads them; it deletes every user except the demo user and the initial
+-- admin, every non-system role, and puts the USER role's permissions back.
+-- Only the migrations table and the system roles' rows are left alone.
+-- Never run it against a real instance.
 --
 -- Dates are relative to the run (now() - N months), so "the leather price
 -- jumped two months ago" stays true on every reset.
 --
 -- Usage (the demo user must exist: boot the app once so the SeedDemoUser
 -- migration creates it from DEMO_EMAIL):
---   psql "$DATABASE_URL" -v demo_email="$DEMO_EMAIL" -f scripts/demo-seed.sql
+--   psql "$DATABASE_URL" -v demo_email="$DEMO_EMAIL" -v admin_email="$ADMIN_EMAIL" \
+--     -f scripts/demo-seed.sql
 -- or through the compose service:
 --   docker exec -i <postgres-container> psql -U <user> -d <db> \
---     -v demo_email="$DEMO_EMAIL" < scripts/demo-seed.sql
+--     -v demo_email="$DEMO_EMAIL" -v admin_email="$ADMIN_EMAIL" < scripts/demo-seed.sql
 
 \set ON_ERROR_STOP on
 
 BEGIN;
 
--- The demo user is looked up by the env value, never written in this file.
+-- The demo user and the initial admin are looked up by their env values,
+-- never written in this file.
 CREATE TEMP TABLE seed_demo_user ON COMMIT DROP AS
-  SELECT id FROM users WHERE email = :'demo_email' AND is_active;
+  SELECT id FROM users WHERE email = :'demo_email';
+CREATE TEMP TABLE seed_kept_user ON COMMIT DROP AS
+  SELECT id FROM users WHERE email IN (:'demo_email', :'admin_email');
 
 DO $$
 BEGIN
   IF (SELECT count(*) FROM seed_demo_user) <> 1 THEN
-    RAISE EXCEPTION 'demo seed: no active user with DEMO_EMAIL; boot the app once so the SeedDemoUser migration creates it';
+    RAISE EXCEPTION 'demo seed: no user with DEMO_EMAIL; boot the app once so the SeedDemoUser migration creates it';
   END IF;
 END $$;
 
@@ -37,10 +42,79 @@ TRUNCATE
   product_price_history, supplies_per_product_history, products,
   supply_price_history, supplies, suppliers,
   product_types, product_names, product_finishes, product_colors,
-  product_sizes, supply_types, expense_categories;
+  product_sizes, supply_types, expense_categories,
+  tn_gateway_rates, tn_installment_rates, tn_tax_config, tn_shipping_config,
+  tn_plans, tn_payment_gateways;
 
-DELETE FROM users WHERE id NOT IN (SELECT id FROM seed_demo_user);
+DELETE FROM users WHERE id NOT IN (SELECT id FROM seed_kept_user);
 DELETE FROM roles WHERE NOT is_system;
+
+-- System roles: ADMIN's permissions are locked by the app; USER's are
+-- editable, so put them back.
+UPDATE roles SET
+  can_view_products = true, can_edit_products = false,
+  can_view_supplies = true, can_edit_supplies = false,
+  can_view_expenses = true, can_edit_expenses = false,
+  can_use_calculator = true, can_manage_scenarios = true,
+  can_view_dashboard = true, can_manage_config = false,
+  can_manage_users = false
+WHERE name = 'USER';
+
+-- The initial admin is required: recreate it if a visitor deleted it. Both
+-- kept users end as active ADMINs.
+INSERT INTO users (email, name, role_id)
+SELECT :'admin_email', 'Administrador', r.id
+FROM roles r
+WHERE r.name = 'ADMIN'
+  AND NOT EXISTS (SELECT 1 FROM users WHERE email = :'admin_email');
+
+UPDATE users SET is_active = true,
+  role_id = (SELECT id FROM roles WHERE name = 'ADMIN')
+WHERE email IN (:'demo_email', :'admin_email');
+
+-- Tiendanube config: the values of the Hefesto dev database on 2026-10-08,
+-- same ids (nothing in the code depends on them, they just stay stable).
+INSERT INTO tn_payment_gateways (id, created_at, updated_at, slug, label, is_active) VALUES ('840a6e46-036a-498e-af93-34d1534692ba', '2026-09-18 22:39:39.007461+00', '2026-09-18 22:39:39.007461+00', 'pago_nube', 'Pago Nube', true);
+INSERT INTO tn_payment_gateways (id, created_at, updated_at, slug, label, is_active) VALUES ('9dbd8205-c5c6-4154-a140-d3f798d6dcc6', '2026-09-18 22:39:39.007461+00', '2026-09-18 22:39:39.007461+00', 'mercado_pago', 'Mercado Pago', true);
+INSERT INTO tn_payment_gateways (id, created_at, updated_at, slug, label, is_active) VALUES ('98af3285-c926-4ac5-a8c3-fe551de9a3fa', '2026-09-18 22:39:39.007461+00', '2026-09-18 22:39:39.007461+00', 'modo', 'MODO', false);
+INSERT INTO tn_plans (id, created_at, updated_at, slug, label, cpt_pago_nube, cpt_other_gateways, only_pago_nube, is_active) VALUES ('6fd9c3c9-c991-4e58-b81c-60a6079d42a1', '2026-09-18 22:39:39.007461+00', '2026-09-18 22:39:39.007461+00', 'inicial', 'Inicial', 0.00, 0.00, true, true);
+INSERT INTO tn_plans (id, created_at, updated_at, slug, label, cpt_pago_nube, cpt_other_gateways, only_pago_nube, is_active) VALUES ('c9822920-938d-477b-8f02-8100946ac5d4', '2026-09-18 22:39:39.007461+00', '2026-09-18 22:39:39.007461+00', 'esencial', 'Esencial', 0.00, 2.00, false, true);
+INSERT INTO tn_plans (id, created_at, updated_at, slug, label, cpt_pago_nube, cpt_other_gateways, only_pago_nube, is_active) VALUES ('277c4919-43b4-44ed-975c-c66bff52911e', '2026-09-18 22:39:39.007461+00', '2026-09-18 22:39:39.007461+00', 'impulso', 'Impulso', 0.00, 1.00, false, true);
+INSERT INTO tn_plans (id, created_at, updated_at, slug, label, cpt_pago_nube, cpt_other_gateways, only_pago_nube, is_active) VALUES ('c519affe-e972-4261-9053-277805ad3207', '2026-09-18 22:39:39.007461+00', '2026-09-18 22:39:39.007461+00', 'escala', 'Escala', 0.00, 0.70, false, true);
+INSERT INTO tn_gateway_rates (id, created_at, updated_at, gateway_id, payment_method, withdrawal_days, rate_percent, is_active, plan_id) VALUES ('09918a5b-8710-48e8-be8a-b91557fe0227', '2026-09-18 22:39:39.007461+00', '2026-09-18 22:39:39.007461+00', '840a6e46-036a-498e-af93-34d1534692ba', 'tarjeta_debito_credito', 7, 4.39, true, NULL);
+INSERT INTO tn_gateway_rates (id, created_at, updated_at, gateway_id, payment_method, withdrawal_days, rate_percent, is_active, plan_id) VALUES ('5b48bb64-4938-4d14-a3ca-c9fc1bc45b4d', '2026-09-18 22:39:39.007461+00', '2026-09-18 22:39:39.007461+00', '840a6e46-036a-498e-af93-34d1534692ba', 'tarjeta_debito_credito', 14, 3.49, true, NULL);
+INSERT INTO tn_gateway_rates (id, created_at, updated_at, gateway_id, payment_method, withdrawal_days, rate_percent, is_active, plan_id) VALUES ('4450810b-bf76-4085-bff9-e73f184f3689', '2026-09-18 22:39:39.007461+00', '2026-09-18 22:39:39.007461+00', '840a6e46-036a-498e-af93-34d1534692ba', 'billetera_virtual', 1, 6.09, true, NULL);
+INSERT INTO tn_gateway_rates (id, created_at, updated_at, gateway_id, payment_method, withdrawal_days, rate_percent, is_active, plan_id) VALUES ('e0b70725-3fe1-416d-9f70-c9632dad2149', '2026-09-18 22:39:39.007461+00', '2026-09-18 22:39:39.007461+00', '840a6e46-036a-498e-af93-34d1534692ba', 'billetera_virtual', 7, 4.39, true, NULL);
+INSERT INTO tn_gateway_rates (id, created_at, updated_at, gateway_id, payment_method, withdrawal_days, rate_percent, is_active, plan_id) VALUES ('6e102ce9-a378-4e99-bd0a-89338123f5fd', '2026-09-18 22:39:39.007461+00', '2026-09-18 22:39:39.007461+00', '840a6e46-036a-498e-af93-34d1534692ba', 'billetera_virtual', 14, 3.49, true, NULL);
+INSERT INTO tn_gateway_rates (id, created_at, updated_at, gateway_id, payment_method, withdrawal_days, rate_percent, is_active, plan_id) VALUES ('94f71d93-2e3a-435c-a59d-7e6852e72113', '2026-09-18 22:39:39.007461+00', '2026-09-18 22:39:39.007461+00', '840a6e46-036a-498e-af93-34d1534692ba', 'transferencia', 1, 1.50, true, NULL);
+INSERT INTO tn_gateway_rates (id, created_at, updated_at, gateway_id, payment_method, withdrawal_days, rate_percent, is_active, plan_id) VALUES ('71c68bfb-86a4-4a0e-9379-608725668282', '2026-09-18 22:39:39.007461+00', '2026-09-18 22:39:39.007461+00', '9dbd8205-c5c6-4154-a140-d3f798d6dcc6', 'todos_los_medios', 0, 6.29, true, NULL);
+INSERT INTO tn_gateway_rates (id, created_at, updated_at, gateway_id, payment_method, withdrawal_days, rate_percent, is_active, plan_id) VALUES ('101e7aac-5ef6-4283-9567-e4b40793666f', '2026-09-18 22:39:39.007461+00', '2026-09-18 22:39:39.007461+00', '9dbd8205-c5c6-4154-a140-d3f798d6dcc6', 'todos_los_medios', 10, 4.39, true, NULL);
+INSERT INTO tn_gateway_rates (id, created_at, updated_at, gateway_id, payment_method, withdrawal_days, rate_percent, is_active, plan_id) VALUES ('aae02421-f5d8-4e26-ab48-df64b8972f52', '2026-09-18 22:39:39.007461+00', '2026-09-18 22:39:39.007461+00', '9dbd8205-c5c6-4154-a140-d3f798d6dcc6', 'todos_los_medios', 18, 3.39, true, NULL);
+INSERT INTO tn_gateway_rates (id, created_at, updated_at, gateway_id, payment_method, withdrawal_days, rate_percent, is_active, plan_id) VALUES ('61f66482-9402-46d4-a8d8-616b624a496b', '2026-09-18 22:39:39.007461+00', '2026-09-18 22:39:39.007461+00', '9dbd8205-c5c6-4154-a140-d3f798d6dcc6', 'todos_los_medios', 35, 1.49, true, NULL);
+INSERT INTO tn_gateway_rates (id, created_at, updated_at, gateway_id, payment_method, withdrawal_days, rate_percent, is_active, plan_id) VALUES ('299e7450-21c0-4e2c-b450-a733f5cad359', '2026-09-18 22:39:39.007461+00', '2026-09-18 22:39:39.007461+00', '98af3285-c926-4ac5-a8c3-fe551de9a3fa', 'tarjeta_credito', 1, 7.11, true, NULL);
+INSERT INTO tn_gateway_rates (id, created_at, updated_at, gateway_id, payment_method, withdrawal_days, rate_percent, is_active, plan_id) VALUES ('318b998a-0f21-4e95-9f82-a7cf3cdc5178', '2026-09-18 22:39:39.007461+00', '2026-09-18 22:39:39.007461+00', '98af3285-c926-4ac5-a8c3-fe551de9a3fa', 'tarjeta_credito', 8, 2.80, true, NULL);
+INSERT INTO tn_gateway_rates (id, created_at, updated_at, gateway_id, payment_method, withdrawal_days, rate_percent, is_active, plan_id) VALUES ('d141156e-4771-4a9f-93fb-d8988221469b', '2026-09-18 22:39:39.007461+00', '2026-09-18 22:39:39.007461+00', '98af3285-c926-4ac5-a8c3-fe551de9a3fa', 'tarjeta_debito', 1, 1.80, true, NULL);
+INSERT INTO tn_gateway_rates (id, created_at, updated_at, gateway_id, payment_method, withdrawal_days, rate_percent, is_active, plan_id) VALUES ('4b989a71-d9d2-4077-86c0-bf7d3a4fe9f0', '2026-09-18 22:39:39.007461+00', '2026-09-18 22:39:39.007461+00', '840a6e46-036a-498e-af93-34d1534692ba', 'tarjeta_debito_credito', 7, 4.45, true, '6fd9c3c9-c991-4e58-b81c-60a6079d42a1');
+INSERT INTO tn_gateway_rates (id, created_at, updated_at, gateway_id, payment_method, withdrawal_days, rate_percent, is_active, plan_id) VALUES ('a6146450-4012-4209-9119-a049d9c30de8', '2026-09-18 22:39:39.007461+00', '2026-09-18 22:39:39.007461+00', '840a6e46-036a-498e-af93-34d1534692ba', 'tarjeta_debito_credito', 14, 3.50, true, '6fd9c3c9-c991-4e58-b81c-60a6079d42a1');
+INSERT INTO tn_gateway_rates (id, created_at, updated_at, gateway_id, payment_method, withdrawal_days, rate_percent, is_active, plan_id) VALUES ('4f54bcdb-b419-4ec9-b68f-15d1f8f262bd', '2026-09-18 22:39:39.007461+00', '2026-09-18 22:39:39.007461+00', '840a6e46-036a-498e-af93-34d1534692ba', 'transferencia', 1, 1.50, true, '6fd9c3c9-c991-4e58-b81c-60a6079d42a1');
+INSERT INTO tn_gateway_rates (id, created_at, updated_at, gateway_id, payment_method, withdrawal_days, rate_percent, is_active, plan_id) VALUES ('e3a231d9-c945-4e1b-8a3c-6a4d43093cb7', '2026-09-18 22:39:39.007461+00', '2026-09-18 22:39:39.007461+00', '840a6e46-036a-498e-af93-34d1534692ba', 'tarjeta_debito_credito', 7, 4.39, true, 'c9822920-938d-477b-8f02-8100946ac5d4');
+INSERT INTO tn_gateway_rates (id, created_at, updated_at, gateway_id, payment_method, withdrawal_days, rate_percent, is_active, plan_id) VALUES ('19b2a0dc-e869-4427-a6f8-69a18fc2f3ff', '2026-09-18 22:39:39.007461+00', '2026-09-18 22:39:39.007461+00', '840a6e46-036a-498e-af93-34d1534692ba', 'tarjeta_debito_credito', 14, 3.49, true, 'c9822920-938d-477b-8f02-8100946ac5d4');
+INSERT INTO tn_gateway_rates (id, created_at, updated_at, gateway_id, payment_method, withdrawal_days, rate_percent, is_active, plan_id) VALUES ('3352937c-d6a9-4a2f-8c6c-c1576fa7ed67', '2026-09-18 22:39:39.007461+00', '2026-09-18 22:39:39.007461+00', '840a6e46-036a-498e-af93-34d1534692ba', 'transferencia', 1, 1.50, true, 'c9822920-938d-477b-8f02-8100946ac5d4');
+INSERT INTO tn_gateway_rates (id, created_at, updated_at, gateway_id, payment_method, withdrawal_days, rate_percent, is_active, plan_id) VALUES ('b2956c07-8747-428d-82b3-54dc5ffccd38', '2026-09-18 22:39:39.007461+00', '2026-09-18 22:39:39.007461+00', '840a6e46-036a-498e-af93-34d1534692ba', 'tarjeta_debito_credito', 7, 4.19, true, '277c4919-43b4-44ed-975c-c66bff52911e');
+INSERT INTO tn_gateway_rates (id, created_at, updated_at, gateway_id, payment_method, withdrawal_days, rate_percent, is_active, plan_id) VALUES ('17c9aa1a-4a7c-4844-8ae8-9862bdbabbb5', '2026-09-18 22:39:39.007461+00', '2026-09-18 22:39:39.007461+00', '840a6e46-036a-498e-af93-34d1534692ba', 'tarjeta_debito_credito', 14, 3.29, true, '277c4919-43b4-44ed-975c-c66bff52911e');
+INSERT INTO tn_gateway_rates (id, created_at, updated_at, gateway_id, payment_method, withdrawal_days, rate_percent, is_active, plan_id) VALUES ('6cd22f15-e2ed-4f9c-b423-f111bb99ef5b', '2026-09-18 22:39:39.007461+00', '2026-09-18 22:39:39.007461+00', '840a6e46-036a-498e-af93-34d1534692ba', 'transferencia', 1, 0.99, true, '277c4919-43b4-44ed-975c-c66bff52911e');
+INSERT INTO tn_gateway_rates (id, created_at, updated_at, gateway_id, payment_method, withdrawal_days, rate_percent, is_active, plan_id) VALUES ('46d9974a-5580-4e94-99a4-827338dc0f63', '2026-09-18 22:39:39.007461+00', '2026-09-18 22:39:39.007461+00', '840a6e46-036a-498e-af93-34d1534692ba', 'tarjeta_debito_credito', 7, 3.89, true, 'c519affe-e972-4261-9053-277805ad3207');
+INSERT INTO tn_gateway_rates (id, created_at, updated_at, gateway_id, payment_method, withdrawal_days, rate_percent, is_active, plan_id) VALUES ('bef30095-b587-4a87-942c-f45c7be9cbdb', '2026-09-18 22:39:39.007461+00', '2026-09-18 22:39:39.007461+00', '840a6e46-036a-498e-af93-34d1534692ba', 'tarjeta_debito_credito', 14, 2.99, true, 'c519affe-e972-4261-9053-277805ad3207');
+INSERT INTO tn_gateway_rates (id, created_at, updated_at, gateway_id, payment_method, withdrawal_days, rate_percent, is_active, plan_id) VALUES ('a88da9f3-ade2-473c-8e36-987436bf4b24', '2026-09-18 22:39:39.007461+00', '2026-09-18 22:39:39.007461+00', '840a6e46-036a-498e-af93-34d1534692ba', 'transferencia', 1, 0.85, true, 'c519affe-e972-4261-9053-277805ad3207');
+INSERT INTO tn_installment_rates (id, created_at, updated_at, installments, rate_percent, is_active) VALUES ('c19b67be-1e04-4e60-837e-03a7d90cf8c6', '2026-09-18 22:39:39.007461+00', '2026-09-18 22:39:39.007461+00', 1, 0.00, true);
+INSERT INTO tn_installment_rates (id, created_at, updated_at, installments, rate_percent, is_active) VALUES ('29c862d6-732b-4907-bd25-245df9a1ae63', '2026-09-18 22:39:39.007461+00', '2026-09-18 22:39:39.007461+00', 3, 8.42, true);
+INSERT INTO tn_installment_rates (id, created_at, updated_at, installments, rate_percent, is_active) VALUES ('95072279-dd26-4f43-b5b7-ce37bdca145c', '2026-09-18 22:39:39.007461+00', '2026-09-18 22:39:39.007461+00', 6, 17.41, true);
+INSERT INTO tn_installment_rates (id, created_at, updated_at, installments, rate_percent, is_active) VALUES ('7cdac7d8-c0db-4e95-9d77-dd5edc48ce09', '2026-09-18 22:39:39.007461+00', '2026-09-18 22:39:39.007461+00', 9, 27.04, true);
+INSERT INTO tn_installment_rates (id, created_at, updated_at, installments, rate_percent, is_active) VALUES ('fb63b23e-6f48-409f-8712-240610b18bee', '2026-09-18 22:39:39.007461+00', '2026-09-18 22:39:39.007461+00', 12, 37.39, true);
+INSERT INTO tn_shipping_config (id, created_at, updated_at, default_shipping_cost, default_shipping_charged, is_active) VALUES ('39717c56-ea28-45b1-b2db-0c7191925045', '2026-09-18 22:39:39.007461+00', '2026-09-18 22:39:39.007461+00', 0.00, 0.00, true);
+INSERT INTO tn_shipping_config (id, created_at, updated_at, default_shipping_cost, default_shipping_charged, is_active) VALUES ('199b78a6-ddb1-438a-8834-ce1dc445a31f', '2026-09-19 00:26:04.986917+00', '2026-09-19 00:26:04.986917+00', 4000.00, 5000.00, true);
+INSERT INTO tn_tax_config (id, created_at, updated_at, iva_rate, iibb_rate, is_active) VALUES ('f26a626a-f188-4cab-bfa1-859f57706a86', '2026-09-18 22:39:39.007461+00', '2026-09-18 22:39:39.007461+00', 21.00, 3.50, true);
+
 
 -- Catalogs: manual order (sort_order dense from 0) and the SKU digit of each
 -- product dimension.
