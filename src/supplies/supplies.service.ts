@@ -13,6 +13,7 @@ import { SupplyPriceHistory } from './entities/supply-price-history.entity';
 import { SupplyType } from '../catalogs/entities/supply-type.entity';
 import { Supplier } from '../suppliers/entities/supplier.entity';
 import { SuppliesPerProductHistory } from '../products/entities/supplies-per-product-history.entity';
+import { CATALOG_ITEM_ORDER } from '../catalogs/catalog-order';
 
 export interface SupplyWithPrice extends Supply {
   currentPrice: string | null;
@@ -40,7 +41,9 @@ export class SuppliesService {
     const supplies = await this.supplyRepo.find({
       where,
       relations: ['type', 'supplier'],
-      order: { type: { name: 'ASC' }, name: 'ASC' },
+      // Grouped by supply type in catalog order; supplies themselves are not
+      // a catalog, so inside a type they stay by name (D-11).
+      order: { type: CATALOG_ITEM_ORDER, name: 'ASC' },
     });
 
     if (supplies.length === 0) {
