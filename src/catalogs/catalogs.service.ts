@@ -15,7 +15,7 @@ import { ProductType } from './entities/product-type.entity';
 import { SupplyType } from './entities/supply-type.entity';
 import { ExpenseCategory } from './entities/expense-category.entity';
 import { CatalogItemEntity } from './entities/catalog-item.entity';
-import { CATALOG_ITEM_ORDER } from './catalog-order';
+import { assertSameSet, CATALOG_ITEM_ORDER } from './catalog-order';
 
 const VALID_DIMENSIONS = [
   'product-types',
@@ -144,6 +144,50 @@ export class CatalogsService {
     const maxSortOrder = result?.maxSortOrder;
 
     return maxSortOrder == null ? 0 : Number(maxSortOrder) + 1;
+  }
+
+  /**
+   * Replaces a dimension's whole order atomically (R2, D-02): the requested
+   * ids must be exactly the current set, and they are renumbered densely
+   * 0..n-1 (D-03) in one statement. Any mismatch is a 400 before any write.
+   */
+  async reorder(
+    dimension: string,
+    ids: string[],
+  ): Promise<CatalogItemEntity[]> {
+    const repo = this.getRepository(dimension);
+
+    await repo.manager.transaction(async (manager): Promise<void> => {
+      // FOR UPDATE in id order: concurrent reorders queue on the first row
+      // instead of locking in different orders and deadlocking (40P01).
+      const current = await manager
+        .createQueryBuilder(repo.target, 'item')
+        .select('item.id', 'id')
+        .orderBy('item.id', 'ASC')
+        .setLock('pessimistic_write')
+        .getRawMany<{ id: string }>();
+
+      assertSameSet(
+        current.map((row) => row.id),
+        ids,
+      );
+
+      if (ids.length === 0) {
+        return;
+      }
+
+      // Identifier from entity metadata (dimension is whitelisted by the map),
+      // never from request text; ids are a bound, DTO-validated uuid[].
+      const table = manager.connection.driver.escape(repo.metadata.tableName);
+      await manager.query(
+        `UPDATE ${table} AS t SET "sort_order" = (v.ord - 1)::smallint
+           FROM unnest($1::uuid[]) WITH ORDINALITY AS v(id, ord)
+          WHERE t."id" = v.id`,
+        [ids],
+      );
+    });
+
+    return this.findAll(dimension);
   }
 
   async update(
