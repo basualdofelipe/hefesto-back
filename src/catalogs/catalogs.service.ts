@@ -158,13 +158,16 @@ export class CatalogsService {
     const repo = this.getRepository(dimension);
 
     await repo.manager.transaction(async (manager): Promise<void> => {
-      // FOR UPDATE in id order: concurrent reorders queue on the first row
-      // instead of locking in different orders and deadlocking (40P01).
+      // FOR NO KEY UPDATE in id order: concurrent reorders queue on the first
+      // row instead of locking in different orders and deadlocking (40P01).
+      // Not FOR UPDATE: only sort_order (a non-key column) changes, and FOR
+      // UPDATE would conflict with the FOR KEY SHARE that FK checks on
+      // products/supplies/expenses take, blocking (or deadlocking) writers.
       const current = await manager
         .createQueryBuilder(repo.target, 'item')
         .select('item.id', 'id')
         .orderBy('item.id', 'ASC')
-        .setLock('pessimistic_write')
+        .setLock('for_no_key_update')
         .getRawMany<{ id: string }>();
 
       assertSameSet(

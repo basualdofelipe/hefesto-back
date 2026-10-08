@@ -12,6 +12,8 @@
  *     leaves the stored order untouched.
  *   - Concurrency: two valid reorders of one dimension queue on the row locks
  *     (taken in id order) instead of deadlocking, and the last one wins.
+ *     The reorder's lock (FOR NO KEY UPDATE) must not wait on the FOR KEY
+ *     SHARE an FK check holds on a catalog row.
  *   - R4: moving an expense category changes its position in the list the
  *     /finanzas/gastos selectors render.
  *
@@ -30,8 +32,8 @@
  * HYGIENE: fixture rows and users carry TEST_PREFIX and are swept in beforeAll
  * (crashed predecessor run) and afterAll. The product-finishes order is
  * snapshotted in beforeAll and restored densely in afterAll with a
- * parameterized UPDATE; the expense-categories case restores its own snapshot
- * in a finally, and afterAll re-checks it.
+ * parameterized UPDATE; the expense-categories and product-sizes cases restore
+ * their own snapshot in a finally, and afterAll re-checks expense-categories.
  */
 
 import { randomUUID } from 'crypto';
@@ -57,6 +59,12 @@ const DIMENSION = 'product-finishes';
 const DIMENSION_TABLE = 'product_finishes';
 const EXPENSE_DIMENSION = 'expense-categories';
 const EXPENSE_TABLE = 'expense_categories';
+const SIZE_DIMENSION = 'product-sizes';
+const SIZE_TABLE = 'product_sizes';
+
+// A reorder that does not wait on FOR KEY SHARE answers well within this; one
+// that does blocks until the holder releases, so the client times out.
+const KEY_SHARE_TIMEOUT_MS = 3000;
 
 const MISMATCH_MESSAGE =
   'El orden enviado no coincide con los ítems actuales del catálogo';
@@ -345,6 +353,44 @@ describe('Catalog reorder HTTP contract (real Postgres)', () => {
 
     expect([resA.status, resB.status]).toEqual([200, 200]);
     expect([orderA, orderB]).toContainEqual(await getIds(DIMENSION));
+  });
+
+  // ─── Reorder vs FK writers ──────────────────────────────────────────────────
+
+  // An FK check on a referencing insert/update (products → product_sizes)
+  // holds FOR KEY SHARE on the catalog row. The reorder only rewrites
+  // sort_order, so it must not wait on that lock: FOR UPDATE would block here
+  // (and can deadlock against a batch insert); FOR NO KEY UPDATE does not.
+  it('reorders while another transaction holds FOR KEY SHARE on a row (FK check)', async () => {
+    const snapshot = await getIds(SIZE_DIMENSION);
+    expect(snapshot.length).toBeGreaterThanOrEqual(2);
+    const reversed = [...snapshot].reverse();
+
+    const fkHolder = dataSource.createQueryRunner();
+    await fkHolder.connect();
+    await fkHolder.startTransaction();
+    try {
+      await fkHolder.query(
+        `SELECT "id" FROM "${SIZE_TABLE}" WHERE "id" = $1 FOR KEY SHARE`,
+        [snapshot[0]],
+      );
+
+      const res = await request(app.getHttpServer())
+        .put(`/api/catalogs/${SIZE_DIMENSION}/order`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ ids: reversed })
+        .timeout(KEY_SHARE_TIMEOUT_MS);
+
+      expect(res.status).toBe(200);
+      expect(
+        (res.body as DataBody<CatalogItemBody[]>).data.map((item) => item.id),
+      ).toEqual(reversed);
+    } finally {
+      await fkHolder.rollbackTransaction();
+      await fkHolder.release();
+      const restored = await putOrder(SIZE_DIMENSION, { ids: snapshot });
+      expect(restored.status).toBe(200);
+    }
   });
 
   // ─── Authorization and unknown dimension ────────────────────────────────────
