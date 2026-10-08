@@ -5,7 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, SelectQueryBuilder } from 'typeorm';
 import {
   extractPermissions,
   isAdminRole,
@@ -33,9 +33,7 @@ export class RolesService {
   ) {}
 
   async findAll(): Promise<RoleView[]> {
-    const roles = await this.roleRepo
-      .createQueryBuilder('role')
-      .loadRelationCountAndMap('role.userCount', 'role.users')
+    const roles = await this.withUserCount()
       .orderBy('role.isSystem', 'DESC')
       .addOrderBy('role.name', 'ASC')
       .getMany();
@@ -56,7 +54,8 @@ export class RolesService {
       throw new ConflictException('Ya existe un rol con ese nombre');
     }
     const role = this.roleRepo.create(dto);
-    return this.toView(await this.roleRepo.save(role));
+    const saved = await this.roleRepo.save(role);
+    return this.findView(saved.id);
   }
 
   async update(id: string, dto: UpdateRoleDto): Promise<RoleView> {
@@ -95,7 +94,8 @@ export class RolesService {
     // ADMIN's stored flags are never written: they are ignored anyway (D-18)
     // and the SPEC rules out a flag migration.
     this.roleRepo.merge(role, isAdmin ? this.withoutPermissions(dto) : dto);
-    return this.toView(await this.roleRepo.save(role));
+    const saved = await this.roleRepo.save(role);
+    return this.findView(saved.id);
   }
 
   async remove(id: string): Promise<void> {
@@ -113,6 +113,28 @@ export class RolesService {
     }
 
     await this.roleRepo.delete(id);
+  }
+
+  /** Roles with `userCount` loaded: every RoleView the API serves carries it. */
+  private withUserCount(): SelectQueryBuilder<Role> {
+    return this.roleRepo
+      .createQueryBuilder('role')
+      .loadRelationCountAndMap('role.userCount', 'role.users');
+  }
+
+  /**
+   * The view of one role, re-read with its user count: the roles screen
+   * replaces its row with the POST/PATCH reply (D-19), and `save()` alone
+   * does not load the count.
+   */
+  private async findView(id: string): Promise<RoleView> {
+    const role = await this.withUserCount()
+      .where('role.id = :id', { id })
+      .getOne();
+    if (!role) {
+      throw new NotFoundException('Rol no encontrado');
+    }
+    return this.toView(role);
   }
 
   private toView(role: Role): RoleView {

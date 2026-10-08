@@ -67,6 +67,7 @@ type RoleBody = Permissions & {
   name: string;
   description: string | null;
   permissionsLocked: boolean;
+  userCount: number;
 };
 
 interface ErrorBody {
@@ -280,6 +281,29 @@ describe('Roles API ADMIN lock (real Postgres)', () => {
     expect(pickPermissions(view)).toEqual(ALL_PERMISSIONS);
   });
 
+  // The roles screen replaces its row with the PATCH reply, so the reply must
+  // carry the same userCount the GET served, not drop it.
+  it('PATCH ADMIN replies with the same userCount as GET', async () => {
+    const list = await request(app.getHttpServer())
+      .get('/api/roles')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .expect(200);
+    const listed = (list.body as { data: RoleBody[] }).data.find(
+      (role) => role.id === adminRoleId,
+    );
+    expect(listed).toBeDefined();
+    // At least the admin user this suite created holds ADMIN
+    expect(listed!.userCount).toBeGreaterThanOrEqual(1);
+
+    const res = await patchRole(adminRoleId, {
+      description: `${TEST_PREFIX}count`,
+    }).expect(200);
+
+    expect((res.body as { data: RoleBody }).data.userCount).toBe(
+      listed!.userCount,
+    );
+  });
+
   it('PATCH ADMIN rename -> 400 (system role rule kept)', async () => {
     const res = await patchRole(adminRoleId, {
       name: `${TEST_PREFIX}RENAMED`,
@@ -300,6 +324,7 @@ describe('Roles API ADMIN lock (real Postgres)', () => {
     const createdView = (created.body as { data: RoleBody }).data;
     expect(createdView.permissionsLocked).toBe(false);
     expect(createdView.canViewProducts).toBe(true);
+    expect(createdView.userCount).toBe(0);
 
     const updated = await patchRole(createdView.id, {
       canViewProducts: false,
@@ -308,5 +333,6 @@ describe('Roles API ADMIN lock (real Postgres)', () => {
     const updatedView = (updated.body as { data: RoleBody }).data;
     expect(updatedView.canViewProducts).toBe(false);
     expect(updatedView.permissionsLocked).toBe(false);
+    expect(updatedView.userCount).toBe(0);
   });
 });

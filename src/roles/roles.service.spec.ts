@@ -46,12 +46,21 @@ const makeRole = (overrides: Partial<Role> = {}): Role =>
 describe('RolesService', () => {
   let service: RolesService;
 
+  // Count the re-read after a write serves with every role it finds.
+  const SAVED_USER_COUNT = 4;
+  // In-memory stand-in for the roles table: save() stores by id, and the
+  // single-role query (where id + getOne) reads it back with its count.
+  let savedById: Map<string, Role>;
+  let queriedId: string | undefined;
+
   // QueryBuilder mock — returned by createQueryBuilder()
   const mockQb = {
     loadRelationCountAndMap: jest.fn().mockReturnThis(),
+    where: jest.fn(),
     orderBy: jest.fn().mockReturnThis(),
     addOrderBy: jest.fn().mockReturnThis(),
     getMany: jest.fn(),
+    getOne: jest.fn(),
   };
 
   const mockRoleRepo = {
@@ -89,6 +98,26 @@ describe('RolesService', () => {
     mockQb.loadRelationCountAndMap.mockReturnThis();
     mockQb.orderBy.mockReturnThis();
     mockQb.addOrderBy.mockReturnThis();
+
+    savedById = new Map();
+    queriedId = undefined;
+    mockRoleRepo.save.mockImplementation((role: Role) => {
+      savedById.set(role.id, role);
+      return Promise.resolve(role);
+    });
+    mockQb.where.mockImplementation(
+      (_condition: string, params: { id: string }) => {
+        queriedId = params.id;
+        return mockQb;
+      },
+    );
+    mockQb.getOne.mockImplementation(() => {
+      const stored =
+        queriedId === undefined ? undefined : savedById.get(queriedId);
+      return Promise.resolve(
+        stored ? { ...stored, userCount: SAVED_USER_COUNT } : null,
+      );
+    });
   });
 
   it('should be defined', () => {
@@ -184,18 +213,21 @@ describe('RolesService', () => {
       await expect(service.create(dto)).rejects.toThrow(ConflictException);
     });
 
-    it('saves and returns the new role when name is unique', async () => {
+    it('saves and returns the new role, re-read with its userCount', async () => {
       const dto: CreateRoleDto = { name: 'VISOR', canViewProducts: true };
       const created = makeRole({ name: 'VISOR', canViewProducts: true });
       mockRoleRepo.findOne.mockResolvedValue(null);
       mockRoleRepo.create.mockReturnValue(created);
-      mockRoleRepo.save.mockResolvedValue(created);
 
       const result = await service.create(dto);
 
       expect(mockRoleRepo.create).toHaveBeenCalledWith(dto);
       expect(mockRoleRepo.save).toHaveBeenCalledWith(created);
-      expect(result).toEqual({ ...created, permissionsLocked: false });
+      expect(result).toEqual({
+        ...created,
+        userCount: SAVED_USER_COUNT,
+        permissionsLocked: false,
+      });
     });
   });
 
@@ -242,23 +274,40 @@ describe('RolesService', () => {
       );
     });
 
-    it('merges dto into role and saves on the happy path', async () => {
+    it('merges dto into role, saves, and returns it re-read with its userCount', async () => {
       const role = makeRole({ name: 'EDITOR', isSystem: false });
-      const saved = makeRole({ name: 'EDITOR', canViewProducts: true });
       // dto has no name change — conflict check branch is skipped entirely,
       // so only one findOne call is made (the findOne(id) inside update).
       mockRoleRepo.findOne.mockResolvedValue(role);
       mockRoleRepo.merge.mockImplementation(
         (target: Role, source: Partial<Role>) => Object.assign(target, source),
       );
-      mockRoleRepo.save.mockResolvedValue(saved);
       const dto: UpdateRoleDto = { canViewProducts: true };
 
       const result = await service.update('role-uuid-1', dto);
 
       expect(mockRoleRepo.merge).toHaveBeenCalledWith(role, dto);
-      expect(mockRoleRepo.save).toHaveBeenCalled();
-      expect(result).toEqual({ ...saved, permissionsLocked: false });
+      expect(result.canViewProducts).toBe(true);
+      expect(result).toEqual({
+        ...role,
+        userCount: SAVED_USER_COUNT,
+        permissionsLocked: false,
+      });
+    });
+
+    it('throws NotFoundException when the role is gone before the re-read', async () => {
+      mockRoleRepo.findOne.mockResolvedValue(makeRole());
+      mockRoleRepo.merge.mockImplementation(
+        (target: Role, source: Partial<Role>) => Object.assign(target, source),
+      );
+      // Saved, then deleted by another request before the reply is built
+      mockRoleRepo.save.mockImplementation((role: Role) =>
+        Promise.resolve(role),
+      );
+
+      await expect(
+        service.update('role-uuid-1', { description: 'x' }),
+      ).rejects.toThrow(new NotFoundException('Rol no encontrado'));
     });
 
     describe('ADMIN permissions are locked (D-18)', () => {
@@ -269,9 +318,6 @@ describe('RolesService', () => {
         mockRoleRepo.merge.mockImplementation(
           (target: Role, source: Partial<Role>) =>
             Object.assign(target, source),
-        );
-        mockRoleRepo.save.mockImplementation((role: Role) =>
-          Promise.resolve(role),
         );
       });
 
@@ -341,6 +387,7 @@ describe('RolesService', () => {
           description: 'only',
           ...ALL_PERMISSIONS,
           permissionsLocked: true,
+          userCount: SAVED_USER_COUNT,
         });
       });
 
