@@ -11,6 +11,8 @@
  *     (PRODUCT_CATALOG_ORDER). The SPEC acceptance case is sizes XS, S, M, L,
  *     XL, whose names sort alphabetically as L, M, S, XL, XS.
  *   - POST /api/products/batch returns its created variants in that order too.
+ *   - Supplies: grouped by supply type in catalog order (type sort_order, then
+ *     type name), by supply name inside a type — supplies are not a catalog.
  *
  * FIXTURE TECHNIQUE: catalog rows are created through the API (the real path),
  * then given crafted sort_order values with parameterized UPDATEs on their own
@@ -71,6 +73,12 @@ const RENUMBERED_TABLES: readonly CatalogTable[] = [
   ...PRODUCT_DIMENSIONS.map((dimension) => dimension.table),
   'supply_types',
 ];
+
+interface SupplyBody {
+  id: string;
+  name: string;
+  type: CatalogItemBody;
+}
 
 interface DataBody<T> {
   data: T;
@@ -385,6 +393,59 @@ describe('Catalog order in product and supply lists (real Postgres)', () => {
         colorA.id,
         colorB.id,
       ]);
+    });
+  });
+
+  // ─── Supplies: grouped by supply type in catalog order ──────────────────────
+
+  describe('GET /api/supplies', () => {
+    const createSupply = async (
+      suffix: string,
+      typeId: string,
+      supplierId: string,
+    ): Promise<SupplyBody> => {
+      const res = await request(app.getHttpServer())
+        .post('/api/supplies')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({
+          name: `${TEST_PREFIX}${suffix}`,
+          typeId,
+          supplierId,
+          unitType: 'unidad',
+        })
+        .expect(201);
+      return (res.body as DataBody<SupplyBody>).data;
+    };
+
+    it('groups supplies by supply type catalog order, then by supply name', async () => {
+      const supplierRes = await request(app.getHttpServer())
+        .post('/api/suppliers')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ name: `${TEST_PREFIX}supplier` })
+        .expect(201);
+      const supplierId = (supplierRes.body as DataBody<{ id: string }>).data.id;
+
+      // zeta sorts after alfa by name but comes first in the catalog.
+      const zeta = await createCatalogItem('supply-types', 'st-zeta');
+      const alfa = await createCatalogItem('supply-types', 'st-alfa');
+      await setSortOrder('supply_types', alfa.id, 29981);
+      await setSortOrder('supply_types', zeta.id, 29980);
+
+      // s3 created before s2 so the name order inside zeta is not insertion order.
+      const s1 = await createSupply('s1', alfa.id, supplierId);
+      const s3 = await createSupply('s3', zeta.id, supplierId);
+      const s2 = await createSupply('s2', zeta.id, supplierId);
+      const wanted = new Set([s1.id, s2.id, s3.id]);
+
+      const res = await request(app.getHttpServer())
+        .get('/api/supplies')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .expect(200);
+      const listed = (res.body as DataBody<SupplyBody[]>).data.filter(
+        (supply) => wanted.has(supply.id),
+      );
+
+      expect(listed.map((supply) => supply.id)).toEqual([s2.id, s3.id, s1.id]);
     });
   });
 });
