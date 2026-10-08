@@ -202,8 +202,11 @@ export class CatalogsService {
     const repo = this.getRepository(dimension);
 
     try {
-      const merged = repo.merge(item, dto);
-      return await repo.save(merged);
+      // Save a partial entity, not the loaded one: TypeORM writes only its
+      // defined props (the DTO's), so a sort_order changed by a reorder that
+      // committed after the read above is never written back. Not
+      // repo.update(): it throws on the empty body PartialType allows.
+      await repo.save(repo.create({ ...dto, id: item.id }));
     } catch (error) {
       if (
         error instanceof QueryFailedError &&
@@ -213,6 +216,8 @@ export class CatalogsService {
       }
       throw error;
     }
+
+    return this.findOne(dimension, id);
   }
 
   async remove(dimension: string, id: string): Promise<void> {

@@ -127,3 +127,128 @@ describe('CatalogsService.create — new items land last', () => {
     expect(Object.keys(dto)).not.toContain('sortOrder');
   });
 });
+
+interface StoredItem {
+  id: string;
+  name: string;
+  sortOrder: number;
+  skuCode?: number;
+}
+
+type ItemPatch = Partial<StoredItem>;
+
+interface FakeRowRepo {
+  findOne(options: { where: { id: string } }): Promise<StoredItem | null>;
+  create(data: ItemPatch): ItemPatch;
+  merge(target: ItemPatch, ...sources: ItemPatch[]): ItemPatch;
+  save(entity: ItemPatch): Promise<ItemPatch>;
+}
+
+/**
+ * In-memory fake of the repository surface CatalogsService.update uses.
+ * `findOne` hands out a snapshot (a copy), like a real read. `save` mirrors
+ * TypeORM: it writes every property of the given entity that is not
+ * `undefined` onto the stored row. `afterFirstRead` runs once, right after the
+ * first snapshot is taken, to play a write committed by another request.
+ */
+const makeRowRepo = (
+  rows: Map<string, StoredItem>,
+  afterFirstRead: () => void,
+): FakeRowRepo => {
+  let pendingHook: (() => void) | null = afterFirstRead;
+
+  return {
+    findOne: ({ where: { id } }): Promise<StoredItem | null> => {
+      const stored = rows.get(id);
+      const snapshot = stored ? { ...stored } : null;
+      const hook = pendingHook;
+      pendingHook = null;
+      hook?.();
+      return Promise.resolve(snapshot);
+    },
+    create: (data: ItemPatch): ItemPatch => ({ ...data }),
+    merge: (target: ItemPatch, ...sources: ItemPatch[]): ItemPatch =>
+      Object.assign(target, ...sources) as ItemPatch,
+    save: (entity: ItemPatch): Promise<ItemPatch> => {
+      const id = entity.id;
+      const stored = id ? rows.get(id) : undefined;
+      if (!id || !stored) {
+        return Promise.reject(new Error(`fake save: no row ${String(id)}`));
+      }
+      const defined = Object.fromEntries(
+        Object.entries(entity).filter(([, value]) => value !== undefined),
+      ) as ItemPatch;
+      rows.set(id, { ...stored, ...defined });
+      return Promise.resolve(entity);
+    },
+  };
+};
+
+describe('CatalogsService.update — a rename never writes sort_order back', () => {
+  const ITEM_ID = '00000000-0000-4000-8000-000000000001';
+  const LOADED_SORT_ORDER = 3;
+  const REORDERED_SORT_ORDER = 7;
+
+  let service: CatalogsService;
+  let rows: Map<string, StoredItem>;
+
+  beforeEach(async () => {
+    rows = new Map<string, StoredItem>([
+      [
+        ITEM_ID,
+        { id: ITEM_ID, name: 'Lisa', sortOrder: LOADED_SORT_ORDER, skuCode: 4 },
+      ],
+    ]);
+    // A reorder that commits between the rename's read and its save.
+    const concurrentReorder = (): void => {
+      const stored = rows.get(ITEM_ID);
+      if (stored) {
+        rows.set(ITEM_ID, { ...stored, sortOrder: REORDERED_SORT_ORDER });
+      }
+    };
+
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        CatalogsService,
+        ...CATALOG_ENTITIES.map((entity) => ({
+          provide: getRepositoryToken(entity),
+          useValue: makeRowRepo(rows, concurrentReorder),
+        })),
+      ],
+    }).compile();
+
+    service = module.get<CatalogsService>(CatalogsService);
+  });
+
+  it('keeps a sort_order committed by a concurrent reorder', async () => {
+    await service.update('product-finishes', ITEM_ID, { name: 'Lisa mate' });
+
+    expect(rows.get(ITEM_ID)).toEqual({
+      id: ITEM_ID,
+      name: 'Lisa mate',
+      sortOrder: REORDERED_SORT_ORDER,
+      skuCode: 4,
+    });
+  });
+
+  it('returns the row as stored after the rename', async () => {
+    const updated = await service.update('product-finishes', ITEM_ID, {
+      name: 'Lisa mate',
+    });
+
+    expect(updated).toMatchObject({
+      name: 'Lisa mate',
+      sortOrder: REORDERED_SORT_ORDER,
+    });
+  });
+
+  it('still answers 404 for an unknown id', async () => {
+    await expect(
+      service.update(
+        'product-finishes',
+        '00000000-0000-4000-8000-000000000099',
+        { name: 'x' },
+      ),
+    ).rejects.toThrow('Item no encontrado');
+  });
+});
