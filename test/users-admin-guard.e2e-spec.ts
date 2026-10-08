@@ -43,6 +43,11 @@
  *    role's can_manage_users flag is false in the DB (a demo visitor edited it).
  *    The ADMIN row is shared by every suite, so its flags are self-healed in
  *    beforeAll/afterAll and restored in a finally around the flip.
+ *
+ * 5. D-20 SQL half: with two active ADMIN-role users and the ADMIN flag off,
+ *    deactivating one must SUCCEED because countOtherActiveAdmins still counts
+ *    the other by role name. The flag-only SQL counts 0 and wrongly rejects.
+ *    This is the only test that fails if `OR r.name = :adminName` is removed.
  */
 
 import { BadRequestException, INestApplication } from '@nestjs/common';
@@ -360,17 +365,6 @@ describe('UsersService admin-guard integration (real Postgres)', () => {
       [ADMIN_ROLE_NAME],
     );
     try {
-      // Baseline with the D-20 rule (role ADMIN or can_manage_users): only
-      // lastAdmin counts. The flag-only rule would count 0 here.
-      const [countRow] = await dataSource.query<[{ cnt: string }]>(
-        `SELECT COUNT(*)::text AS cnt FROM users u
-           JOIN roles r ON r.id = u.role_id
-           WHERE u.is_active = true
-             AND (r.can_manage_users = true OR r.name = $1)`,
-        [ADMIN_ROLE_NAME],
-      );
-      expect(parseInt(countRow.cnt, 10)).toBe(1);
-
       await expect(
         usersService.update(lastAdmin.id, { isActive: false }, callerEditor.id),
       ).rejects.toThrow(
@@ -378,6 +372,39 @@ describe('UsersService admin-guard integration (real Postgres)', () => {
           'No se puede dejar el sistema sin administradores activos',
         ),
       );
+    } finally {
+      await restoreAdminFlags();
+    }
+  }, 30000);
+
+  // ─────────────────────────────────────────────────────────────────
+  // Test 5: D-20 SQL half — an ADMIN-role user with the flag off still
+  // counts as the other admin in countOtherActiveAdmins
+  // ─────────────────────────────────────────────────────────────────
+  it('Test 5 (D-20 SQL): an ADMIN-role user with the flag off counts as the other admin', async () => {
+    // Deactivate every seeded admin so the two test admins are the only
+    // active ADMIN-role users. afterEach restores them.
+    await dataSource.query(
+      `UPDATE users SET is_active = false WHERE email = ANY($1)`,
+      [SEED_ADMIN_EMAILS],
+    );
+
+    const victim = await createTestUser('sql-victim', adminRole, true);
+    const otherAdmin = await createTestUser('sql-other', adminRole, true);
+
+    await dataSource.query(
+      `UPDATE roles SET can_manage_users = false WHERE name = $1`,
+      [ADMIN_ROLE_NAME],
+    );
+    try {
+      // D-20 SQL counts otherAdmin by role name → 1 → the deactivation goes
+      // through. The flag-only SQL counts 0 and throws the last-admin 400.
+      const updated = await usersService.update(
+        victim.id,
+        { isActive: false },
+        otherAdmin.id,
+      );
+      expect(updated.isActive).toBe(false);
     } finally {
       await restoreAdminFlags();
     }
