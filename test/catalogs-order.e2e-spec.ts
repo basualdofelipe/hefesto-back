@@ -346,4 +346,24 @@ describe('Catalog sort order (real Postgres)', () => {
       },
     );
   });
+
+  // ─── POST /api/catalogs/:dimension: new items land last ─────────────────────
+
+  describe('POST /api/catalogs/:dimension', () => {
+    it('puts the created item last in GET', async () => {
+      const created = await createItem('product-finishes', `${TEST_PREFIX}new`);
+
+      const items = await getDimension('product-finishes');
+
+      expect(items[items.length - 1].id).toBe(created.id);
+    });
+
+    it('rejects a client-sent sortOrder with 400', async () => {
+      await request(app.getHttpServer())
+        .post('/api/catalogs/product-finishes')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ name: `${TEST_PREFIX}bad`, sortOrder: 0 })
+        .expect(400);
+    });
+  });
 });
