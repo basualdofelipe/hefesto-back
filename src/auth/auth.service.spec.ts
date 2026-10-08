@@ -58,7 +58,14 @@ describe('AuthService', () => {
     getOrThrow: jest.fn().mockReturnValue('test-google-client-id'),
   };
 
+  // Demo state is read from process.env at call time (isDemoMode, D-13).
+  // Every test starts with demo mode off and the original value is restored.
+  let originalDemoFlag: string | undefined;
+
   beforeEach(async () => {
+    originalDemoFlag = process.env.DEMO_LOGIN_ENABLED;
+    process.env.DEMO_LOGIN_ENABLED = 'false';
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         AuthService,
@@ -73,6 +80,14 @@ describe('AuthService', () => {
     jwtService = module.get<JwtService>(JwtService);
 
     jest.clearAllMocks();
+  });
+
+  afterEach(() => {
+    if (originalDemoFlag === undefined) {
+      delete process.env.DEMO_LOGIN_ENABLED;
+    } else {
+      process.env.DEMO_LOGIN_ENABLED = originalDemoFlag;
+    }
   });
 
   it('should be defined', () => {
@@ -178,6 +193,60 @@ describe('AuthService', () => {
         service.validateGoogleToken('token-no-email'),
       ).rejects.toThrow('Token de Google invalido');
     });
+
+    describe('in demo mode', () => {
+      const GOOGLE_DISABLED_MESSAGE = 'Login con Google no disponible';
+
+      const compileServiceInDemoMode = async (): Promise<AuthService> => {
+        process.env.DEMO_LOGIN_ENABLED = 'true';
+        const throwingConfigService = {
+          get: jest.fn(),
+          getOrThrow: jest.fn(() => {
+            throw new Error('GOOGLE_CLIENT_ID must not be read in demo mode');
+          }),
+        };
+
+        const demoModule: TestingModule = await Test.createTestingModule({
+          providers: [
+            AuthService,
+            { provide: UsersService, useValue: mockUsersService },
+            { provide: JwtService, useValue: mockJwtService },
+            { provide: ConfigService, useValue: throwingConfigService },
+          ],
+        }).compile();
+
+        return demoModule.get<AuthService>(AuthService);
+      };
+
+      it('rejects any Google token with 401 before verifying it', async () => {
+        process.env.DEMO_LOGIN_ENABLED = 'true';
+
+        const rejection = service.validateGoogleToken('any');
+
+        await expect(rejection).rejects.toThrow(UnauthorizedException);
+        await expect(rejection).rejects.toThrow(GOOGLE_DISABLED_MESSAGE);
+        expect(mockUsersService.findActiveByEmail).not.toHaveBeenCalled();
+      });
+
+      it('constructs without reading GOOGLE_CLIENT_ID and still refuses Google', async () => {
+        const demoService = await compileServiceInDemoMode();
+
+        expect(demoService).toBeDefined();
+        await expect(demoService.validateGoogleToken('any')).rejects.toThrow(
+          GOOGLE_DISABLED_MESSAGE,
+        );
+      });
+
+      it('refuses Google when demo mode is turned off after a demo-mode construction (no Google client)', async () => {
+        const demoService = await compileServiceInDemoMode();
+        process.env.DEMO_LOGIN_ENABLED = 'false';
+
+        const rejection = demoService.validateGoogleToken('any');
+
+        await expect(rejection).rejects.toThrow(UnauthorizedException);
+        await expect(rejection).rejects.toThrow(GOOGLE_DISABLED_MESSAGE);
+      });
+    });
   });
 
   describe('getProfile', () => {
@@ -256,7 +325,7 @@ describe('AuthService', () => {
     };
 
     it('returns accessToken + user when flag=true and user exists', async () => {
-      mockConfigService.get.mockReturnValue('true');
+      process.env.DEMO_LOGIN_ENABLED = 'true';
       mockUsersService.findActiveByEmail.mockResolvedValue(mockDemoUser);
       mockJwtService.sign.mockReturnValue('signed-token');
 
@@ -273,34 +342,37 @@ describe('AuthService', () => {
     });
 
     it('throws UnauthorizedException when DEMO_LOGIN_ENABLED=false', async () => {
-      mockConfigService.get.mockReturnValue('false');
+      process.env.DEMO_LOGIN_ENABLED = 'false';
 
-      await expect(service.validateDemoLogin(getDemoEmail())).rejects.toThrow(
-        UnauthorizedException,
-      );
+      const rejection = service.validateDemoLogin(getDemoEmail());
+
+      await expect(rejection).rejects.toThrow(UnauthorizedException);
+      await expect(rejection).rejects.toThrow('Demo login no disponible');
       expect(mockUsersService.findActiveByEmail).not.toHaveBeenCalled();
     });
 
     it('throws UnauthorizedException when DEMO_LOGIN_ENABLED is unset', async () => {
-      mockConfigService.get.mockReturnValue(undefined);
+      delete process.env.DEMO_LOGIN_ENABLED;
 
-      await expect(service.validateDemoLogin(getDemoEmail())).rejects.toThrow(
-        UnauthorizedException,
-      );
+      const rejection = service.validateDemoLogin(getDemoEmail());
+
+      await expect(rejection).rejects.toThrow(UnauthorizedException);
+      await expect(rejection).rejects.toThrow('Demo login no disponible');
     });
 
     it('throws UnauthorizedException when user not found', async () => {
-      mockConfigService.get.mockReturnValue('true');
+      process.env.DEMO_LOGIN_ENABLED = 'true';
       mockUsersService.findActiveByEmail.mockResolvedValue(null);
 
-      await expect(service.validateDemoLogin(getDemoEmail())).rejects.toThrow(
-        UnauthorizedException,
-      );
+      const rejection = service.validateDemoLogin(getDemoEmail());
+
+      await expect(rejection).rejects.toThrow(UnauthorizedException);
+      await expect(rejection).rejects.toThrow('Usuario demo no encontrado');
       expect(mockJwtService.sign).not.toHaveBeenCalled();
     });
 
     it('rejects any non-demo email even when flag=true (no privilege escalation)', async () => {
-      mockConfigService.get.mockReturnValue('true');
+      process.env.DEMO_LOGIN_ENABLED = 'true';
 
       await expect(
         service.validateDemoLogin('admin@hefesto.com'),
@@ -311,7 +383,7 @@ describe('AuthService', () => {
     });
 
     it('looks up the pinned demo account, not the client-supplied address', async () => {
-      mockConfigService.get.mockReturnValue('true');
+      process.env.DEMO_LOGIN_ENABLED = 'true';
       mockUsersService.findActiveByEmail.mockResolvedValue(mockDemoUser);
       mockJwtService.sign.mockReturnValue('signed-token');
 
@@ -324,7 +396,7 @@ describe('AuthService', () => {
 
     it('respeta DEMO_EMAIL del env (override)', async () => {
       process.env.DEMO_EMAIL = 'demo@foo.com';
-      mockConfigService.get.mockReturnValue('true');
+      process.env.DEMO_LOGIN_ENABLED = 'true';
       mockUsersService.findActiveByEmail.mockResolvedValue(mockDemoUser);
       mockJwtService.sign.mockReturnValue('signed-token');
 
