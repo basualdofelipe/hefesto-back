@@ -115,7 +115,8 @@ export class CatalogsService {
         dto.skuCode = (parseInt(result.maxCode, 10) || 0) + 1;
       }
 
-      const item = repo.create(dto);
+      const sortOrder = await this.nextSortOrder(repo);
+      const item = repo.create({ ...dto, sortOrder });
       return await repo.save(item);
     } catch (error) {
       if (
@@ -126,6 +127,23 @@ export class CatalogsService {
       }
       throw error;
     }
+  }
+
+  /**
+   * New items land last: MAX(sort_order) + 1, or 0 in an empty dimension (D-03).
+   * Concurrent creates may share a value; the name tiebreak keeps the order
+   * deterministic and the next reorder normalizes it (dismissed in the SPEC).
+   */
+  private async nextSortOrder(
+    repo: Repository<CatalogItemEntity>,
+  ): Promise<number> {
+    const result = await repo
+      .createQueryBuilder('item')
+      .select('MAX(item.sortOrder)', 'maxSortOrder')
+      .getRawOne<{ maxSortOrder: number | string | null }>();
+    const maxSortOrder = result?.maxSortOrder;
+
+    return maxSortOrder == null ? 0 : Number(maxSortOrder) + 1;
   }
 
   async update(
