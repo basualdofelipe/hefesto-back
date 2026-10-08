@@ -201,12 +201,22 @@ export class CatalogsService {
     const item = await this.findOne(dimension, id);
     const repo = this.getRepository(dimension);
 
+    // PartialType allows an empty body: nothing to write. TypeORM skips
+    // undefined values, so an all-undefined body would only bump updated_at.
+    const hasChanges = Object.values(dto).some((value) => value !== undefined);
+
     try {
-      // Save a partial entity, not the loaded one: TypeORM writes only its
-      // defined props (the DTO's), so a sort_order changed by a reorder that
-      // committed after the read above is never written back. Not
-      // repo.update(): it throws on the empty body PartialType allows.
-      await repo.save(repo.create({ ...dto, id: item.id }));
+      if (hasChanges) {
+        // UPDATE only the DTO's columns, never the loaded entity: a sort_order
+        // set by a reorder that committed after the read above is never
+        // written back (WR-05). Not save(): if another request deletes the
+        // row in between, save() INSERTs it again (WR-56); UPDATE matches no
+        // row and answers 404. TypeORM sets updated_at itself.
+        const result = await repo.update({ id: item.id }, dto);
+        if (!result.affected) {
+          throw new NotFoundException('Item no encontrado');
+        }
+      }
     } catch (error) {
       if (
         error instanceof QueryFailedError &&

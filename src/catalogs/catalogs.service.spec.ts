@@ -1,3 +1,4 @@
+import { NotFoundException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { CatalogsService } from './catalogs.service';
@@ -142,14 +143,26 @@ interface FakeRowRepo {
   create(data: ItemPatch): ItemPatch;
   merge(target: ItemPatch, ...sources: ItemPatch[]): ItemPatch;
   save(entity: ItemPatch): Promise<ItemPatch>;
+  update(
+    criteria: { id: string },
+    patch: ItemPatch,
+  ): Promise<{ affected: number }>;
 }
+
+/** The props of a patch that are not `undefined`; TypeORM skips the rest. */
+const definedProps = (patch: ItemPatch): ItemPatch =>
+  Object.fromEntries(
+    Object.entries(patch).filter(([, value]) => value !== undefined),
+  ) as ItemPatch;
 
 /**
  * In-memory fake of the repository surface CatalogsService.update uses.
- * `findOne` hands out a snapshot (a copy), like a real read. `save` mirrors
- * TypeORM: it writes every property of the given entity that is not
- * `undefined` onto the stored row. `afterFirstRead` runs once, right after the
- * first snapshot is taken, to play a write committed by another request.
+ * `findOne` hands out a snapshot (a copy), like a real read. `save` and
+ * `update` mirror TypeORM: both write only the props that are not
+ * `undefined`. `save` INSERTs when no row has the id (sort_order DEFAULT 0);
+ * `update` touches only an existing row and reports how many it matched.
+ * `afterFirstRead` runs once, right after the first snapshot is taken, to play
+ * a write committed by another request.
  */
 const makeRowRepo = (
   rows: Map<string, StoredItem>,
@@ -171,17 +184,43 @@ const makeRowRepo = (
       Object.assign(target, ...sources) as ItemPatch,
     save: (entity: ItemPatch): Promise<ItemPatch> => {
       const id = entity.id;
-      const stored = id ? rows.get(id) : undefined;
-      if (!id || !stored) {
-        return Promise.reject(new Error(`fake save: no row ${String(id)}`));
+      if (!id) {
+        return Promise.reject(new Error('fake save: no id'));
       }
-      const defined = Object.fromEntries(
-        Object.entries(entity).filter(([, value]) => value !== undefined),
-      ) as ItemPatch;
-      rows.set(id, { ...stored, ...defined });
+      const base: StoredItem = rows.get(id) ?? { id, name: '', sortOrder: 0 };
+      rows.set(id, { ...base, ...definedProps(entity) });
       return Promise.resolve(entity);
     },
+    update: (
+      { id }: { id: string },
+      patch: ItemPatch,
+    ): Promise<{ affected: number }> => {
+      const stored = rows.get(id);
+      if (!stored) {
+        return Promise.resolve({ affected: 0 });
+      }
+      rows.set(id, { ...stored, ...definedProps(patch) });
+      return Promise.resolve({ affected: 1 });
+    },
   };
+};
+
+/** A CatalogsService whose 7 repositories share one in-memory row fake. */
+const compileWithRowRepo = async (
+  rows: Map<string, StoredItem>,
+  afterFirstRead: () => void,
+): Promise<CatalogsService> => {
+  const module: TestingModule = await Test.createTestingModule({
+    providers: [
+      CatalogsService,
+      ...CATALOG_ENTITIES.map((entity) => ({
+        provide: getRepositoryToken(entity),
+        useValue: makeRowRepo(rows, afterFirstRead),
+      })),
+    ],
+  }).compile();
+
+  return module.get<CatalogsService>(CatalogsService);
 };
 
 describe('CatalogsService.update — a rename never writes sort_order back', () => {
@@ -207,17 +246,7 @@ describe('CatalogsService.update — a rename never writes sort_order back', () 
       }
     };
 
-    const module: TestingModule = await Test.createTestingModule({
-      providers: [
-        CatalogsService,
-        ...CATALOG_ENTITIES.map((entity) => ({
-          provide: getRepositoryToken(entity),
-          useValue: makeRowRepo(rows, concurrentReorder),
-        })),
-      ],
-    }).compile();
-
-    service = module.get<CatalogsService>(CatalogsService);
+    service = await compileWithRowRepo(rows, concurrentReorder);
   });
 
   it('keeps a sort_order committed by a concurrent reorder', async () => {
@@ -250,5 +279,32 @@ describe('CatalogsService.update — a rename never writes sort_order back', () 
         { name: 'x' },
       ),
     ).rejects.toThrow('Item no encontrado');
+  });
+});
+
+describe('CatalogsService.update — a rename racing a delete never re-inserts the row', () => {
+  const ITEM_ID = '00000000-0000-4000-8000-000000000002';
+
+  let service: CatalogsService;
+  let rows: Map<string, StoredItem>;
+
+  beforeEach(async () => {
+    rows = new Map<string, StoredItem>([
+      [ITEM_ID, { id: ITEM_ID, name: 'Hilo', sortOrder: 5 }],
+    ]);
+    // A delete that commits between the rename's read and its write.
+    const concurrentDelete = (): void => {
+      rows.delete(ITEM_ID);
+    };
+
+    service = await compileWithRowRepo(rows, concurrentDelete);
+  });
+
+  it('answers 404 and leaves no row with that id', async () => {
+    await expect(
+      service.update('supply-types', ITEM_ID, { name: 'Hilo encerado' }),
+    ).rejects.toThrow(NotFoundException);
+
+    expect(rows.has(ITEM_ID)).toBe(false);
   });
 });
