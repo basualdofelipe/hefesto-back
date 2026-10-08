@@ -19,7 +19,7 @@
  *
  * REQUIREMENT: docker compose up -d postgres-test (postgres-test on port 5433)
  * must be running before executing this suite. Run with:
- *   npm run test:e2e -- --testPathPattern=users-admin-guard
+ *   npm run test:e2e -- --testPathPatterns=users-admin-guard
  * or:
  *   npx jest --config ./test/jest-e2e.json test/users-admin-guard.e2e-spec.ts --runInBand
  *
@@ -38,6 +38,11 @@
  *    user is deleted and the scenario is transferred + renamed + updatedAt bumped.
  *    Pre-fix → EntityPropertyNotFoundError (updated_at property not found);
  *    post-fix → resolves OK.
+ *
+ * 4. D-20: the sole active admin keeps last-admin protection when the ADMIN
+ *    role's can_manage_users flag is false in the DB (a demo visitor edited it).
+ *    The ADMIN row is shared by every suite, so its flags are self-healed in
+ *    beforeAll/afterAll and restored in a finally around the flip.
  */
 
 import { BadRequestException, INestApplication } from '@nestjs/common';
@@ -49,9 +54,24 @@ import { User } from '../src/users/entities/user.entity';
 import { Role } from '../src/roles/entities/role.entity';
 import { Scenario } from '../src/scenarios/entities/scenario.entity';
 import { ADMIN_EMAIL, getDemoEmail } from '../src/constants/branding';
+import { ADMIN_ROLE_NAME } from '../src/common/types/permission';
 
 // Unique prefix for all test-created rows — makes cleanup safe and targeted.
 const TEST_PREFIX = 'e2e-admin-guard-';
+
+const PERMISSION_COLUMNS = [
+  'can_view_products',
+  'can_edit_products',
+  'can_view_supplies',
+  'can_edit_supplies',
+  'can_view_expenses',
+  'can_edit_expenses',
+  'can_use_calculator',
+  'can_manage_scenarios',
+  'can_view_dashboard',
+  'can_manage_config',
+  'can_manage_users',
+] as const;
 
 describe('UsersService admin-guard integration (real Postgres)', () => {
   let app: INestApplication;
@@ -92,6 +112,10 @@ describe('UsersService admin-guard integration (real Postgres)', () => {
     roleRepo = dataSource.getRepository(Role);
     scenarioRepo = dataSource.getRepository(Scenario);
 
+    // Self-heal: another suite (or a crashed run of Test 4) may have left the
+    // ADMIN row's flags false; the flag-based role lookups below need them true.
+    await restoreAdminFlags();
+
     // Resolve roles by permission flags (seeded by migrations).
     // admin role = canManageUsers: true; editor role = canManageUsers: false.
     adminRole = await roleRepo.findOneOrFail({
@@ -103,8 +127,20 @@ describe('UsersService admin-guard integration (real Postgres)', () => {
   });
 
   afterAll(async () => {
-    await app.close();
+    try {
+      await restoreAdminFlags();
+    } finally {
+      await app.close();
+    }
   });
+
+  // Sets all 11 ADMIN flags back to the seeded `true`
+  async function restoreAdminFlags(): Promise<void> {
+    const assignments = PERMISSION_COLUMNS.map((c) => `${c} = true`).join(', ');
+    await dataSource.query(`UPDATE roles SET ${assignments} WHERE name = $1`, [
+      ADMIN_ROLE_NAME,
+    ]);
+  }
 
   /**
    * WR-04: defensively reactivate the seed admin before every test so the
@@ -299,5 +335,51 @@ describe('UsersService admin-guard integration (real Postgres)', () => {
     expect(transferred!.updatedAt.getTime()).toBeGreaterThan(
       originalUpdatedAt.getTime(),
     );
+  }, 30000);
+
+  // ─────────────────────────────────────────────────────────────────
+  // Test 4: D-20 — ADMIN role with can_manage_users = false is still an admin
+  // ─────────────────────────────────────────────────────────────────
+  it('Test 4 (D-20): last-admin guard protects the sole ADMIN-role user when the ADMIN row has can_manage_users = false', async () => {
+    // Same idiom as Test 2: deactivate every seeded admin so a freshly
+    // created test admin is the sole active admin. afterEach restores them.
+    await dataSource.query(
+      `UPDATE users SET is_active = false WHERE email = ANY($1)`,
+      [SEED_ADMIN_EMAILS],
+    );
+
+    const lastAdmin = await createTestUser('noflag-lastadmin', adminRole, true);
+    const callerEditor = await createTestUser(
+      'noflag-caller-editor',
+      editorRole,
+      true,
+    );
+
+    await dataSource.query(
+      `UPDATE roles SET can_manage_users = false WHERE name = $1`,
+      [ADMIN_ROLE_NAME],
+    );
+    try {
+      // Baseline with the D-20 rule (role ADMIN or can_manage_users): only
+      // lastAdmin counts. The flag-only rule would count 0 here.
+      const [countRow] = await dataSource.query<[{ cnt: string }]>(
+        `SELECT COUNT(*)::text AS cnt FROM users u
+           JOIN roles r ON r.id = u.role_id
+           WHERE u.is_active = true
+             AND (r.can_manage_users = true OR r.name = $1)`,
+        [ADMIN_ROLE_NAME],
+      );
+      expect(parseInt(countRow.cnt, 10)).toBe(1);
+
+      await expect(
+        usersService.update(lastAdmin.id, { isActive: false }, callerEditor.id),
+      ).rejects.toThrow(
+        new BadRequestException(
+          'No se puede dejar el sistema sin administradores activos',
+        ),
+      );
+    } finally {
+      await restoreAdminFlags();
+    }
   }, 30000);
 });
