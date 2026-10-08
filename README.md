@@ -6,18 +6,18 @@ REST API backend for **Hefesto** — a cost management and pricing tool for a le
 
 ## Stack
 
-| Layer      | Technology                                                          |
-| ---------- | ------------------------------------------------------------------- |
-| Framework  | NestJS 11                                                           |
-| Language   | TypeScript 5 (strict, no `any`, explicit return types)              |
-| ORM        | TypeORM 0.3 with hand-written reversible migrations                 |
-| Database   | PostgreSQL 16                                                       |
-| Auth       | Google OAuth (ID token exchange) + JWT (Bearer)                     |
-| Validation | class-validator + class-transformer, Joi env validation (fail-fast) |
-| API docs   | Swagger / OpenAPI (`@nestjs/swagger`) — development only            |
-| Security   | Helmet, CORS, `@nestjs/throttler` (100 req / 60 s global)           |
-| Process    | Procfile (`node dist/main.js`) for Railway                          |
-| Local DB   | Docker Compose (PostgreSQL 16 Alpine)                               |
+| Layer      | Technology                                                                                                                           |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| Framework  | NestJS 11                                                                                                                            |
+| Language   | TypeScript 5 (strict, no `any`, explicit return types)                                                                               |
+| ORM        | TypeORM 0.3 with hand-written reversible migrations                                                                                  |
+| Database   | PostgreSQL 16                                                                                                                        |
+| Auth       | Google OAuth (ID token exchange) + JWT (Bearer)                                                                                      |
+| Validation | class-validator + class-transformer, Joi env validation (fail-fast)                                                                  |
+| API docs   | Swagger / OpenAPI (`@nestjs/swagger`) — development only                                                                             |
+| Security   | Helmet, CORS, `@nestjs/throttler` (100 req / 60 s per CF-Connecting-IP; requests without it — internal Docker traffic — not limited) |
+| Process    | Procfile (`node dist/main.js`) for Railway                                                                                           |
+| Local DB   | Docker Compose (PostgreSQL 16 Alpine)                                                                                                |
 
 ---
 

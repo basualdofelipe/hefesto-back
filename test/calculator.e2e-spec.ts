@@ -22,8 +22,8 @@
  * AddPlanToGatewayRates) on app init. Run with:
  *   npm run test:e2e -- --testPathPatterns=calculator
  *
- * NOTE: the global ThrottlerGuard allows 100 requests per 60 s. This suite
- * issues ~20; repeated full-suite runs inside one minute can surface as 429.
+ * NOTE: supertest requests carry no CF-Connecting-IP, so the global
+ * ThrottlerGuard never limits them.
  *
  * HYGIENE: fixture users are e2e-calc-admin@test.com / e2e-calc-user@test.com
  * (prefix TEST_PREFIX); tn_shipping_config rows are tracked by id. Both are
