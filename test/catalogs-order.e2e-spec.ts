@@ -41,7 +41,10 @@ import { AppModule } from '../src/app.module';
 import { HttpExceptionFilter } from '../src/common/filters/http-exception.filter';
 import { LoggingInterceptor } from '../src/common/interceptors/logging.interceptor';
 import { ResponseInterceptor } from '../src/common/interceptors/response.interceptor';
-import { extractPermissions } from '../src/common/types/permission';
+import {
+  ADMIN_ROLE_NAME,
+  extractPermissions,
+} from '../src/common/types/permission';
 import {
   BackfillOrderBy,
   backfillSortOrder,
@@ -159,9 +162,11 @@ describe('Catalog sort order (real Postgres)', () => {
       await backfillSortOrder(queryRunner, table, '"sort_order", "name"');
     }
 
-    const adminRole = await roleRepo.findOneOrFail({
-      where: { canManageConfig: true, isSystem: true },
-    });
+    // By name, not by stored flags: other suites flip ADMIN's flags (D-18
+    // ignores them), and a crashed run would leave them flipped.
+    const adminRole = await roleRepo.findOneByOrFail({ name: ADMIN_ROLE_NAME });
+    // TypeORM drops an undefined condition, so pin that we got the ADMIN row
+    expect(adminRole.name).toBe(ADMIN_ROLE_NAME);
     const admin = await userRepo.save(
       userRepo.create({
         email: `${TEST_PREFIX}admin@test.com`,

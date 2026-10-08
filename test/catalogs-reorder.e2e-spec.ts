@@ -48,12 +48,16 @@ import { AppModule } from '../src/app.module';
 import { HttpExceptionFilter } from '../src/common/filters/http-exception.filter';
 import { LoggingInterceptor } from '../src/common/interceptors/logging.interceptor';
 import { ResponseInterceptor } from '../src/common/interceptors/response.interceptor';
-import { extractPermissions } from '../src/common/types/permission';
+import {
+  ADMIN_ROLE_NAME,
+  extractPermissions,
+} from '../src/common/types/permission';
 import { Role } from '../src/roles/entities/role.entity';
 import { User } from '../src/users/entities/user.entity';
 
 // Unique prefix for every test-created row — makes cleanup safe and targeted.
 const TEST_PREFIX = 'e2e-reord-';
+const USER_ROLE_NAME = 'USER';
 
 const DIMENSION = 'product-finishes';
 const DIMENSION_TABLE = 'product_finishes';
@@ -160,13 +164,15 @@ describe('Catalog reorder HTTP contract (real Postgres)', () => {
     originalFinishIds = await readIdsInOrder(DIMENSION_TABLE);
     originalExpenseIds = await readIdsInOrder(EXPENSE_TABLE);
 
-    // Seeded system roles: ADMIN (can_edit_products) and USER (without it)
-    const adminRole = await roleRepo.findOneOrFail({
-      where: { canManageConfig: true, isSystem: true },
-    });
-    const userRole = await roleRepo.findOneOrFail({
-      where: { canManageConfig: false, isSystem: true },
-    });
+    // Seeded system roles: ADMIN (can_edit_products) and USER (without it).
+    // By name, not by stored flags: other suites flip ADMIN's flags (D-18
+    // ignores them), and a crashed run would leave them flipped.
+    const adminRole = await roleRepo.findOneByOrFail({ name: ADMIN_ROLE_NAME });
+    // TypeORM drops an undefined condition, so pin that we got the ADMIN row
+    expect(adminRole.name).toBe(ADMIN_ROLE_NAME);
+    const userRole = await roleRepo.findOneByOrFail({ name: USER_ROLE_NAME });
+    expect(userRole.name).toBe(USER_ROLE_NAME);
+    expect(userRole.canEditProducts).toBe(false);
 
     const admin = await userRepo.save(
       userRepo.create({
