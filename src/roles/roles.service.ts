@@ -6,10 +6,22 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import {
+  extractPermissions,
+  isAdminRole,
+  PERMISSION_TO_CAMEL,
+  Permissions,
+} from '../common/types/permission';
 import { User } from '../users/entities/user.entity';
 import { CreateRoleDto } from './dto/create-role.dto';
 import { UpdateRoleDto } from './dto/update-role.dto';
 import { Role } from './entities/role.entity';
+
+/** Role as served by the roles API: effective permissions plus the server-computed lock (D-19). */
+export type RoleView = Role & { permissionsLocked: boolean };
+
+const PERMISSION_FIELDS: readonly (keyof Permissions)[] =
+  Object.values(PERMISSION_TO_CAMEL);
 
 @Injectable()
 export class RolesService {
@@ -20,13 +32,14 @@ export class RolesService {
     private readonly userRepo: Repository<User>,
   ) {}
 
-  async findAll(): Promise<Role[]> {
-    return this.roleRepo
+  async findAll(): Promise<RoleView[]> {
+    const roles = await this.roleRepo
       .createQueryBuilder('role')
       .loadRelationCountAndMap('role.userCount', 'role.users')
       .orderBy('role.isSystem', 'DESC')
       .addOrderBy('role.name', 'ASC')
       .getMany();
+    return roles.map((role) => this.toView(role));
   }
 
   async findOne(id: string): Promise<Role> {
@@ -37,16 +50,16 @@ export class RolesService {
     return role;
   }
 
-  async create(dto: CreateRoleDto): Promise<Role> {
+  async create(dto: CreateRoleDto): Promise<RoleView> {
     const existing = await this.roleRepo.findOne({ where: { name: dto.name } });
     if (existing) {
       throw new ConflictException('Ya existe un rol con ese nombre');
     }
     const role = this.roleRepo.create(dto);
-    return this.roleRepo.save(role);
+    return this.toView(await this.roleRepo.save(role));
   }
 
-  async update(id: string, dto: UpdateRoleDto): Promise<Role> {
+  async update(id: string, dto: UpdateRoleDto): Promise<RoleView> {
     const role = await this.findOne(id);
 
     if (role.isSystem && dto.name !== undefined && dto.name !== role.name) {
@@ -55,11 +68,19 @@ export class RolesService {
       );
     }
 
-    // Admin lockout prevention: ADMIN role must always retain can_manage_users
-    if (role.name === 'ADMIN' && dto.canManageUsers === false) {
-      throw new BadRequestException(
-        'No se puede quitar el permiso de gestion de usuarios al rol ADMIN',
+    // D-18: ADMIN always has every permission. Sending the effective values
+    // (all true) is allowed; anything else is a change attempt. An explicit
+    // null arrives as false through the DTO @Transform, so it is refused too.
+    const isAdmin = isAdminRole(role);
+    if (isAdmin) {
+      const attempted = PERMISSION_FIELDS.filter(
+        (field) => dto[field] !== undefined && dto[field] !== true,
       );
+      if (attempted.length > 0) {
+        throw new BadRequestException(
+          'No se pueden modificar los permisos del rol ADMIN',
+        );
+      }
     }
 
     if (dto.name && dto.name !== role.name) {
@@ -71,8 +92,10 @@ export class RolesService {
       }
     }
 
-    this.roleRepo.merge(role, dto);
-    return this.roleRepo.save(role);
+    // ADMIN's stored flags are never written: they are ignored anyway (D-18)
+    // and the SPEC rules out a flag migration.
+    this.roleRepo.merge(role, isAdmin ? this.withoutPermissions(dto) : dto);
+    return this.toView(await this.roleRepo.save(role));
   }
 
   async remove(id: string): Promise<void> {
@@ -90,5 +113,21 @@ export class RolesService {
     }
 
     await this.roleRepo.delete(id);
+  }
+
+  private toView(role: Role): RoleView {
+    return {
+      ...role,
+      ...extractPermissions(role),
+      permissionsLocked: isAdminRole(role),
+    };
+  }
+
+  private withoutPermissions(dto: UpdateRoleDto): UpdateRoleDto {
+    const changes: UpdateRoleDto = { ...dto };
+    for (const field of PERMISSION_FIELDS) {
+      delete changes[field];
+    }
+    return changes;
   }
 }
