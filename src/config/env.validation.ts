@@ -6,6 +6,8 @@ export const envValidationSchema = Joi.object({
     .default('development'),
   PORT: Joi.number().default(4000),
   DATABASE_URL: Joi.string().required(),
+  // Read straight from process.env by data-source.ts (the migrations CLI has no ConfigService).
+  DATABASE_SSL: Joi.string().valid('true', 'false').default('false'),
   FRONTEND_URL: Joi.string().required(),
   JWT_SECRET: Joi.string().required(),
   // Google login is off in demo mode, so its client id is only required outside

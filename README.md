@@ -6,18 +6,18 @@ REST API backend for **Hefesto** — a cost management and pricing tool for a le
 
 ## Stack
 
-| Layer      | Technology                                                          |
-| ---------- | ------------------------------------------------------------------- |
-| Framework  | NestJS 11                                                           |
-| Language   | TypeScript 5 (strict, no `any`, explicit return types)              |
-| ORM        | TypeORM 0.3 with hand-written reversible migrations                 |
-| Database   | PostgreSQL 16                                                       |
-| Auth       | Google OAuth (ID token exchange) + JWT (Bearer)                     |
-| Validation | class-validator + class-transformer, Joi env validation (fail-fast) |
-| API docs   | Swagger / OpenAPI (`@nestjs/swagger`) — development only            |
-| Security   | Helmet, CORS, `@nestjs/throttler` (100 req / 60 s global)           |
-| Process    | Procfile (`node dist/main.js`) for Railway                          |
-| Local DB   | Docker Compose (PostgreSQL 16 Alpine)                               |
+| Layer      | Technology                                                                                                                           |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| Framework  | NestJS 11                                                                                                                            |
+| Language   | TypeScript 5 (strict, no `any`, explicit return types)                                                                               |
+| ORM        | TypeORM 0.3 with hand-written reversible migrations                                                                                  |
+| Database   | PostgreSQL 16                                                                                                                        |
+| Auth       | Google OAuth (ID token exchange) + JWT (Bearer)                                                                                      |
+| Validation | class-validator + class-transformer, Joi env validation (fail-fast)                                                                  |
+| API docs   | Swagger / OpenAPI (`@nestjs/swagger`) — development only                                                                             |
+| Security   | Helmet, CORS, `@nestjs/throttler` (100 req / 60 s per CF-Connecting-IP; requests without it — internal Docker traffic — not limited) |
+| Process    | Procfile (`node dist/main.js`) for Railway                                                                                           |
+| Local DB   | Docker Compose (PostgreSQL 16 Alpine)                                                                                                |
 
 ---
 
@@ -283,7 +283,7 @@ The project is configured for deployment to Railway but is **not currently hoste
 web: node dist/main.js
 ```
 
-Build step: `npm run build`. The SSL option `rejectUnauthorized: false` is applied automatically when `NODE_ENV=production` to support Railway's managed PostgreSQL.
+Build step: `npm run build`. Set `DATABASE_SSL=true` to connect with SSL (`rejectUnauthorized: false`, for managed PostgreSQL such as Railway); it defaults to `false`, independent of `NODE_ENV`.
 
 Required environment variables in production: `DATABASE_URL`, `FRONTEND_URL`, `JWT_SECRET`, `GOOGLE_CLIENT_ID`. Set these in the Railway service dashboard.
 
