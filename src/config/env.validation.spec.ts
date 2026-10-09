@@ -73,6 +73,42 @@ describe('envValidationSchema — GOOGLE_CLIENT_ID vs demo mode', () => {
   });
 });
 
+describe('envValidationSchema — DATABASE_SSL', () => {
+  const BASE_ENV = {
+    DATABASE_URL: 'postgresql://user:pass@localhost:5433/env_spec',
+    FRONTEND_URL: 'http://localhost:3000',
+    JWT_SECRET: 'env-spec-secret',
+    GOOGLE_CLIENT_ID: 'test-google-client-id',
+  };
+
+  const validate = (
+    env: NodeJS.ProcessEnv,
+  ): ReturnType<typeof envValidationSchema.validate> =>
+    envValidationSchema.validate(env, {
+      allowUnknown: true,
+      abortEarly: false,
+    });
+
+  it('defaults to "false" when unset', () => {
+    const { error, value } = validate({ ...BASE_ENV });
+
+    expect(error).toBeUndefined();
+    expect((value as { DATABASE_SSL: string }).DATABASE_SSL).toBe('false');
+  });
+
+  it.each(['true', 'false'])('accepts "%s"', (flag) => {
+    const { error } = validate({ ...BASE_ENV, DATABASE_SSL: flag });
+
+    expect(error).toBeUndefined();
+  });
+
+  it.each(['yes', '1', 'TRUE', ''])('rejects "%s"', (flag) => {
+    const { error } = validate({ ...BASE_ENV, DATABASE_SSL: flag });
+
+    expect(error?.message).toContain('DATABASE_SSL');
+  });
+});
+
 describe('isDemoMode', () => {
   let originalDemoFlag: string | undefined;
 

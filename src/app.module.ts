@@ -8,6 +8,7 @@ import { CatalogsModule } from './catalogs/catalogs.module';
 import { CostsModule } from './costs/costs.module';
 import { ExpensesModule } from './expenses/expenses.module';
 import { envValidationSchema } from './config/env.validation';
+import { throttlerConfig } from './config/throttler.config';
 import { typeOrmConfig } from './config/typeorm.config';
 import { ProductsModule } from './products/products.module';
 import { SuppliesModule } from './supplies/supplies.module';
@@ -27,9 +28,7 @@ import { AppService } from './app.service';
       validationSchema: envValidationSchema,
       validationOptions: { abortEarly: false },
     }),
-    ThrottlerModule.forRoot({
-      throttlers: [{ ttl: 60000, limit: 100 }],
-    }),
+    ThrottlerModule.forRoot(throttlerConfig),
     TypeOrmModule.forRoot(typeOrmConfig),
     AuthModule,
     UsersModule,
