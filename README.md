@@ -283,7 +283,7 @@ The project is configured for deployment to Railway but is **not currently hoste
 web: node dist/main.js
 ```
 
-Build step: `npm run build`. The SSL option `rejectUnauthorized: false` is applied automatically when `NODE_ENV=production` to support Railway's managed PostgreSQL.
+Build step: `npm run build`. Set `DATABASE_SSL=true` to connect with SSL (`rejectUnauthorized: false`, for managed PostgreSQL such as Railway); it defaults to `false`, independent of `NODE_ENV`.
 
 Required environment variables in production: `DATABASE_URL`, `FRONTEND_URL`, `JWT_SECRET`, `GOOGLE_CLIENT_ID`. Set these in the Railway service dashboard.
 
